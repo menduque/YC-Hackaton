@@ -23,12 +23,36 @@ export interface TurnoPayload {
   enviaRecordatorio?: boolean; // default true
 }
 
+/** What the call already persisted in MedPlum before the RPA was handed the job. */
+export interface MedplumRefs {
+  patientId?: string;
+  appointmentId?: string;
+  /** The Task the widget reports back against. Absent if the write didn't land. */
+  taskId?: string;
+}
+
 /** Message pushed to the widget over the WS "pull" transport (handoff §2.C). */
 export interface OidoScheduleMessage {
   type: "OIDO_SCHEDULE";
   callId: string;
   payload: TurnoPayload;
   lento?: boolean;
+  medplum?: MedplumRefs;
+}
+
+/**
+ * The widget's verdict on the RPA run, sent once the Treelan form is filled or
+ * the job aborts. Not a requestWidget() reply: the fill crosses a full page
+ * navigation and takes far longer than that channel's timeout, so it arrives
+ * unsolicited and is correlated by taskId.
+ */
+export interface OidoRpaResultMessage {
+  type: "OIDO_RPA_RESULT";
+  taskId: string;
+  ok: boolean;
+  /** Fields written into the Treelan panel, when it got that far. */
+  cargados?: number;
+  error?: string;
 }
 
 /** V2 per-field streaming message (handoff §7). */
