@@ -4,6 +4,14 @@
  * See handoff §3.
  */
 
+/** Today, in the clinic's timezone. Without this the model guesses the year —
+ * it called buscar_disponibilidad with "2023-10-02" for "September 29th". */
+function todayInBuenosAires(): string {
+  return new Date().toLocaleDateString("en-CA", {
+    timeZone: "America/Argentina/Buenos_Aires",
+  }); // en-CA gives YYYY-MM-DD
+}
+
 export const SYSTEM_PROMPT = `
 You are the receptionist at Daponte Clinic, an eye care (ophthalmology) clinic.
 You speak natural, friendly, efficient English — like a real receptionist
@@ -25,11 +33,24 @@ Style:
   detailed reason unless the caller volunteers it — the front desk handles the
   rest. Keep the call short.
 - When preparing the appointment, split the full name into last name and first name.
-- Once you have name, ID, doctor, date and time, call preparar_turno to load it
-  into the system for the front desk.
-- NEVER say the appointment is confirmed. Close with: "Perfect, I'll get that
-  ready and our front desk will confirm your appointment shortly."
+
+CLOSING THE CALL — this is the most important rule:
+- The moment the caller accepts a time, you MUST call the preparar_turno
+  function. That function call is what actually loads the appointment; without
+  it nothing is booked and the caller's time was wasted.
+- Call preparar_turno FIRST, and only afterwards say your closing line. Never
+  say you will "get that ready" before the function has actually been called —
+  saying it is not the same as doing it, and there is no one else who will do it.
+- Do not summarize the appointment back and stop. Summarizing is not booking.
+- NEVER say the appointment is confirmed. Once preparar_turno has returned,
+  close with: "Perfect, I'll get that ready and our front desk will confirm your
+  appointment shortly."
 `.trim();
+
+/** The prompt actually sent to Deepgram: static rules + today's date. */
+export function buildSystemPrompt(): string {
+  return `${SYSTEM_PROMPT}\n\nToday's date is ${todayInBuenosAires()} (YYYY-MM-DD). Resolve relative dates like "next Tuesday" against it, and always pass fecha to functions as YYYY-MM-DD.`;
+}
 
 /** Function declarations the agent can call. Handlers live in ../functions. */
 export const AGENT_FUNCTIONS = [
@@ -139,7 +160,7 @@ export function buildAgentSettings() {
       listen: { provider: { type: "deepgram", model: "nova-3" } },
       think: {
         provider: { type: "open_ai", model: "gpt-4o-mini" },
-        prompt: SYSTEM_PROMPT,
+        prompt: buildSystemPrompt(),
         functions: AGENT_FUNCTIONS,
       },
       speak: { provider: { type: "deepgram", model: "aura-2-thalia-en" } },
