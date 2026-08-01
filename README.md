@@ -119,6 +119,20 @@ There is no `medplum init` command — `medplum project` only has `list`, `curre
 not browser WASM — so it only runs server-side. `loadIndex()` pulls the index into memory
 and queries then run locally in ~1 ms instead of a cloud round-trip.
 
+Two kinds of index:
+
+- `oido-clinical` — the triage/scheduling knowledge base. Built once with
+  `npm run moss:index`.
+- `oido-hc-<documento>` — **one per patient**, built from their Treelan chart the moment
+  the widget reads it (`backend/src/session/historias.ts`). A real chart is ~70
+  consultations and ~35k characters; it gets chunked one document per consultation, so
+  mid-call the agent retrieves the two or three that answer what was asked instead of
+  carrying the whole history in the prompt. Per-patient because `buildIndex` replaces the
+  whole index — one shared index would mean reindexing every patient on every read.
+
+Without `MOSS_*` keys the charts still load and `obtener_contexto_paciente` still answers
+(summary + a word-overlap fallback); it's the semantic part that goes missing.
+
 ## The eligibility bench (`app/`)
 
 A React SPA for developing the 270/271 flow without going through the voice loop: pick a

@@ -64,6 +64,27 @@ they are.
 
 Never read their chart number or home address out loud unless they ask.
 
+## Their chart
+
+Once buscar_paciente has found them, their Treelan chart is available through
+obtener_contexto_paciente — every past consultation, what the doctor indicated,
+and their history. Call it whenever the caller asks about themselves: "what did
+the doctor say last time?", "am I still supposed to use the drops?", "when was
+my surgery?", "which insurance do you have on file?".
+
+The chart is written in Spanish, and so is the search over it: put what they
+asked into "consulta" TRANSLATED TO SPANISH ("what did the doctor say about my
+eye?" → "qué me indicó el doctor sobre el ojo"). Then answer them in English, in
+one or two sentences.
+
+Hard limits — this is a receptionist reading a chart, not a doctor:
+- Only say what is actually in what came back. If it isn't there, say you don't
+  see it in the chart and the doctor can go over it at the visit.
+- Never interpret findings, never give medical advice, never suggest a treatment
+  or a change to one.
+- Never read the chart out loud line by line, and never mention chart numbers,
+  diagnosis codes or other patients.
+
 ## What to collect
 
 For a patient buscar_paciente already found, skip 1 and collect 2, 3 and 4 —
@@ -156,11 +177,26 @@ export const AGENT_FUNCTIONS = [
   {
     name: "obtener_contexto_paciente",
     description:
-      "Fetch the patient's history and relevant findings (Moss + MedPlum) to personalize the conversation.",
+      "The caller's chart, read from Treelan and searchable (Moss + MedPlum). Call it whenever " +
+      "they ask about themselves — their last visit, what the doctor indicated, their drops, " +
+      "their surgery, their insurance — or when a symptom they mention might already be in the " +
+      "chart. Returns resumen (who they are) plus relevante (the pieces that answer `consulta`).",
     parameters: {
       type: "object",
-      properties: { documento: { type: "string", description: "ID number" } },
-      required: ["documento"],
+      properties: {
+        consulta: {
+          type: "string",
+          description:
+            "What the caller asked, TRANSLATED TO SPANISH — the chart is in Spanish and the " +
+            "search matches against it (e.g. 'qué me indicó el doctor para el golpe en el ojo'). " +
+            "Leave empty to just get the summary.",
+        },
+        documento: {
+          type: "string",
+          description: "ID number. Omit to use the caller buscar_paciente already identified.",
+        },
+      },
+      required: [],
     },
   },
   {

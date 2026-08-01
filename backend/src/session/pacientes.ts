@@ -21,6 +21,8 @@ export interface PacienteIdentificado {
   fechaNacimiento?: string;
   domicilio?: string;
   procedencia?: string;
+  /** paciente.php?p_id=…&id=… — la ficha de donde se lee la historia clinica. */
+  fichaUrl?: string;
 }
 
 const porLlamada = new Map<string, PacienteIdentificado>();

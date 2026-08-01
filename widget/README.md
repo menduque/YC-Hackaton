@@ -92,5 +92,29 @@ El punto de entrada único es `arrancarCon(payload, lento, origen)` y hay tres t
 
 La máquina de estados no cambia: el origen del dato no altera cómo se llena el formulario.
 
+## Historia clínica → contexto del agente de voz
+
+Además de agendar, el widget **lee** la ficha del paciente (`paciente.php`) y la manda al
+backend, que la parte en documentos y la indexa en Moss. Durante la llamada el agente
+recupera de ahí (`obtener_contexto_paciente`) en vez de tener 35.000 caracteres de historia
+en el prompt.
+
+Las siete solapas del paciente (H.C., Ficha, Derivaciones, Diagnósticos, Protocolos,
+Quirúrgico, Histórico) son Spry — puro cliente — así que el server las manda **todas** en el
+mismo HTML: un solo GET trae la historia entera, sin clickear ni navegar.
+
+Dos disparadores, ambos de solo lectura:
+
+- **El operador abre la pestaña de un paciente.** `content.js` detecta que está parado en
+  `paciente.php`, parsea lo que ya está cargado y se lo manda al service worker, que lo
+  postea a `POST /v1/pacientes/contexto`. El POST sale del service worker y no del content
+  script porque Treelan es HTTPS y un `fetch` a `http://localhost` se bloquea como mixed
+  content (mismo motivo que el WS).
+- **`buscar_paciente` identifica a quien llama.** La fila de resultados no tiene `<a>`: la
+  URL de la ficha sale del `onclick` (`Link_Tables('paciente.php?p_id=…&id=…')`). El backend
+  pide `OIDO_LEER_HISTORIA` por el WS y la lectura corre en paralelo al saludo del agente.
+
+Para probarlo sin Chrome: `npx tsx src/scripts/widgetLoopback.ts` desde `backend/`.
+
 Ver **`HANDOFF-NUEVO-REPO.md`** para el pipeline completo (Deepgram + Moss + Stedi + MedPlum) y el
 mapeo campo por campo de qué sale de la llamada.
