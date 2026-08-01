@@ -29,11 +29,36 @@ function reenviarATreelan(msg, sendResponse) {
       return;
     }
     chrome.tabs.sendMessage(tab.id, msg, (resp) => {
-      if (chrome.runtime.lastError) {
-        sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+      if (!chrome.runtime.lastError) {
+        sendResponse(resp || { ok: true });
         return;
       }
-      sendResponse(resp || { ok: true });
+      // "Receiving end does not exist": la pestania existe pero no hay content
+      // script vivo en ella. Pasa SIEMPRE que recargas la extension teniendo
+      // Treelan ya abierto — Chrome mata el content script viejo y no inyecta
+      // el nuevo en pestanias que ya estaban cargadas. La llamada corre
+      // perfecta, el payload llega hasta aca y se pierde en el ultimo salto.
+      // Lo inyectamos a mano y reintentamos una vez.
+      console.warn('[oido] content script ausente, inyectando:', chrome.runtime.lastError.message);
+      chrome.scripting.executeScript(
+        { target: { tabId: tab.id }, files: ['rpa.js', 'content.js'] },
+        () => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ ok: false, error: `no pude inyectar: ${chrome.runtime.lastError.message}` });
+            return;
+          }
+          // Un respiro para que content.js registre su onMessage.
+          setTimeout(() => {
+            chrome.tabs.sendMessage(tab.id, msg, (resp2) => {
+              if (chrome.runtime.lastError) {
+                sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+                return;
+              }
+              sendResponse(resp2 || { ok: true });
+            });
+          }, 200);
+        },
+      );
     });
   });
 }

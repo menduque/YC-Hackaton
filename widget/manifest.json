@@ -3,6 +3,7 @@
   "name": "georgetown — Oido widget (turnos Treelan)",
   "version": "1.1.0",
   "description": "MODO DEMO: ejecuta el RPA de agendamiento en Treelan con el payload que surge de la llamada con el paciente. Nunca confirma el turno.",
+  "permissions": ["scripting"],
   "host_permissions": [
     "https://daponteojos.selfip.com/treelan/*",
     "http://localhost:8787/*",
