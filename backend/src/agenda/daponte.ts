@@ -8,7 +8,9 @@
  * the agent says out loud comes from here, and `preparar_turno` refuses anything
  * that isn't a free slot in this table.
  *
- * The demo window is **hardcoded to September 26–29, 2026** (handoff §9.11).
+ * The demo window is **hardcoded**: two near-term openings (August 7 and 13,
+ * 2026) plus the original September 26–29 block (handoff §9.11). The August days
+ * have exactly one free slot each — they are what the agent leads with.
  * Every date the agent produces is coerced to year 2026 — a caller saying
  * "the 28th" or an LLM defaulting to 2025 both land on 2026-09-28.
  *
@@ -80,12 +82,50 @@ function dia(
 }
 
 /**
- * The four demo days. Consultorio Montañeses, half-hour grid.
+ * A nearly-full day: everything in the grid is taken EXCEPT `libres`. Saying
+ * "this day has one opening left" beats listing fourteen occupied slots by hand,
+ * and it keeps the offer the agent makes obvious from reading the table.
+ */
+function diaConLibres(
+  fecha: string,
+  bloques: Array<[string, string]>,
+  libres: string[],
+): DiaAgenda {
+  const todos = bloques.flatMap(([a, b]) => grilla(a, b));
+  return dia(
+    fecha,
+    bloques,
+    todos.filter((h) => !libres.includes(h)),
+  );
+}
+
+/**
+ * The demo days. Consultorio Montañeses, half-hour grid.
  * `ocupados` / `bloqueados` are there so the agenda reads like a real one — the
  * agent can never offer them.
  */
 const AGENDA: Record<string, DiaAgenda> = Object.fromEntries(
   [
+    // Los dos huecos que la demo ofrece primero (son los mas cercanos, y
+    // diasAbiertos() ordena por fecha). Un solo slot libre cada uno: asi Mira
+    // propone exactamente "7 de agosto 12:00" o "13 de agosto 15:00" en vez de
+    // recitar una agenda entera.
+    diaConLibres(
+      "2026-08-07", // viernes
+      [
+        ["09:00", "13:00"],
+        ["14:30", "18:00"],
+      ],
+      ["12:00"],
+    ),
+    diaConLibres(
+      "2026-08-13", // jueves
+      [
+        ["09:00", "13:00"],
+        ["14:30", "18:00"],
+      ],
+      ["15:00"],
+    ),
     // Sábado 26 — sólo turno mañana.
     dia("2026-09-26", [["09:00", "12:00"]], ["10:00", "11:30"]),
     // Domingo 27 — guardia acotada de mañana.
@@ -117,10 +157,27 @@ const AGENDA: Record<string, DiaAgenda> = Object.fromEntries(
  * Slots already handed to a caller in this process. Keyed `fecha hora` → callId.
  * They stop being offered, but the same call can still re-prepare its own slot
  * (the RPA may need a second run if Treelan hiccups).
+ *
+ * Holds EXPIRE. Without a TTL a single rehearsal burns the slot for the rest of
+ * the process: rehearse the demo at 12:00 once and the real run is told 12:00 is
+ * taken, which is exactly as confusing as it sounds.
  */
-const reservados = new Map<string, string>();
+const RESERVA_TTL_MS = 20 * 60 * 1000;
+const reservados = new Map<string, { callId: string; at: number }>();
 
 const clave = (fecha: string, hora: string) => `${fecha} ${hora}`;
+
+/** The callId still holding this slot, or null once the hold has aged out. */
+function duenio(fecha: string, hora: string): string | null {
+  const k = clave(fecha, hora);
+  const r = reservados.get(k);
+  if (!r) return null;
+  if (Date.now() - r.at > RESERVA_TTL_MS) {
+    reservados.delete(k);
+    return null;
+  }
+  return r.callId;
+}
 
 // ------------------------------------------------------------ normalización
 
@@ -171,9 +228,15 @@ export function normalizarFecha(raw: unknown): string | null {
     return iso(a, b); // MM/DD (the agent speaks English)
   }
 
-  // "the 28th", "28" → the demo window is September, so assume it.
+  // "the 28th", "28" — bare day number, no month. The window spans August and
+  // September now, so resolve it to the open day that actually has that number
+  // rather than guessing a month and landing on a day with no agenda.
   m = s.match(/^(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?$/);
-  if (m) return iso(9, Number(m[1]));
+  if (m) {
+    const d = Number(m[1]);
+    const abierto = diasAbiertos().find((f) => Number(f.slice(8, 10)) === d);
+    return abierto ?? iso(9, d);
+  }
 
   return null;
 }
@@ -247,7 +310,7 @@ export function slotsLibres(
     .filter((s) => s.estado === "libre")
     .filter((s) => franja === "any" || franjaDe(s.hora) === franja)
     .filter((s) => {
-      const owner = reservados.get(clave(fecha, s.hora));
+      const owner = duenio(fecha, s.hora);
       return !owner || owner === callId;
     })
     .map((s) => s.hora);
@@ -266,18 +329,25 @@ export function estadoDeSlot(
   const slot = d.slots.find((s) => s.hora === hora);
   if (!slot) return "inexistente";
   if (slot.estado !== "libre") return slot.estado;
-  const owner = reservados.get(clave(fecha, hora));
+  const owner = duenio(fecha, hora);
   if (owner && owner !== callId) return "tomado";
   return "libre";
 }
 
 /** Hold a slot for this call so a later call in the same demo isn't offered it. */
 export function reservar(fecha: string, hora: string, callId: string): void {
-  reservados.set(clave(fecha, hora), callId);
+  reservados.set(clave(fecha, hora), { callId, at: Date.now() });
 }
 
 export function liberar(fecha: string, hora: string): void {
   reservados.delete(clave(fecha, hora));
+}
+
+/** Drop every hold — the "give me a clean agenda before the demo" button. */
+export function liberarTodo(): number {
+  const n = reservados.size;
+  reservados.clear();
+  return n;
 }
 
 /**

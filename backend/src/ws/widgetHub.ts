@@ -51,6 +51,15 @@ export function registerWidgetHub(wss: WebSocketServer) {
       }
       if (msg?.type === "OIDO_RESULT" && typeof msg.id === "string") {
         settle(msg.id, msg);
+        return;
+      }
+      // The extension got the payload but could not hand it to Treelan (tab
+      // closed, session expired). pushSchedule already reported "delivered",
+      // so without this the appointment vanishes without a trace.
+      if (msg?.type === "OIDO_DELIVERY" && msg.ok === false) {
+        console.error(
+          `[widget-hub] callId=${callId} the extension could NOT reach Treelan: ${msg.error}`,
+        );
       }
     });
 
@@ -100,6 +109,15 @@ function settle(id: string, msg: any) {
   clearTimeout(p.timer);
   if (msg.ok === false) p.reject(new Error(msg.error || "Widget reported an error"));
   else p.resolve(msg.result);
+}
+
+/**
+ * Which callIds have a widget on the other end, and how many sockets each.
+ * The whole class of "the call went fine but nothing happened in Treelan" bugs
+ * is just this map being empty (or keyed by a callId nobody is listening on).
+ */
+export function connectedWidgets(): Record<string, number> {
+  return Object.fromEntries([...byCallId].map(([callId, set]) => [callId, set.size]));
 }
 
 /** Push the full appointment payload to any widget connected on this callId. */

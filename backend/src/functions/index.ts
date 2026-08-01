@@ -125,11 +125,18 @@ export const handlers: Record<string, Handler> = {
           "Ask the caller for their ID number, or their full name if they don't have it handy.",
       };
     }
+    // Speech-to-text duplicates digits in long spoken numbers surprisingly often
+    // ("4 1 1 7 2 7 4 5" has come back as 411727445 and 4117272745). Bouncing the
+    // caller more than once over it is worse than just taking their name.
     if (dni && !/^\d{7,8}$/.test(dni)) {
       return {
         ok: false,
+        digitos_recibidos: dni.length,
         instruccion:
-          "That ID number doesn't look right. Ask them to repeat it digit by digit.",
+          `You heard ${dni.length} digits and an ID number has 7 or 8, so it was probably ` +
+          "misheard. Read back what you have digit by digit and ask them to correct it. " +
+          "If the next attempt is still wrong, stop asking for the number — ask for their " +
+          "full name instead and call buscar_paciente with apellido and nombre.",
       };
     }
 
@@ -156,6 +163,22 @@ export const handlers: Record<string, Handler> = {
     }
 
     if (!res.encontrado || res.pacientes.length === 0) {
+      // A dropped digit still looks like a valid ID, so "not found" is far more
+      // often a mishearing than a genuinely new patient. Confirm the number
+      // before sending them down the registration path — that dead end is where
+      // the call stalls, demanding a date of birth from someone already on file.
+      if (dni) {
+        return {
+          encontrado: false,
+          documento_buscado: dni,
+          instruccion:
+            `Nothing matched ${dni}. Do NOT say they aren't in the system yet and do ` +
+            `NOT start registering them. Read the number back one digit at a time — ` +
+            `"${dni.split("").join(" ")}" — and ask if that's right. If they correct it, ` +
+            `call buscar_paciente again with the corrected number. Only if they confirm ` +
+            `it IS correct should you collect their full name and date of birth as a new patient.`,
+        };
+      }
       return {
         encontrado: false,
         instruccion:
@@ -190,6 +213,8 @@ export const handlers: Record<string, Handler> = {
       fechaNacimiento: p.fechaNacimiento,
       domicilio: p.domicilio,
       procedencia: p.procedencia,
+      cobertura: FICHA.cobertura,
+      usaLC: FICHA.usaLC,
     });
 
     return {
@@ -199,10 +224,17 @@ export const handlers: Record<string, Handler> = {
       hc: p.hc,
       fechaNacimiento: p.fechaNacimiento,
       doctor: DOCTOR.display,
+      // Read off the chart the widget just opened. The caller confirms these
+      // rather than dictating them, which is what keeps the call short.
+      ultima_visita: FICHA.ultimaVisita,
+      cobertura_en_ficha: FICHA.cobertura,
       instruccion:
-        `Greet them by first name ("${p.nombre}"), tell them they saw ${DOCTOR.display} ` +
-        `last time, and ask if it's ok to book the consultation with him. ` +
-        `We already have their name, address and date of birth — do NOT ask for them again. ` +
+        `Greet them by FIRST NAME ("${p.nombre}") and go straight to why they're calling: ` +
+        `ask whether they have a specific concern or just want a general check. ` +
+        `Their last visit was for ${FICHA.ultimaVisita} and the chart has ${FICHA.cobertura} ` +
+        `on file — confirm the coverage later ("do you still have ${FICHA.cobertura}?"), ` +
+        `never ask for it from scratch. We already have their name, address, date of birth ` +
+        `and contact-lens status — do NOT ask for any of it. ` +
         `Do not read the chart number or address out loud.`,
     };
   },
@@ -298,10 +330,16 @@ export const handlers: Record<string, Handler> = {
         ...opt("celular", pac.celular),
         ...opt("email", pac.email?.toString().toLowerCase()),
       },
-      ...opt("cobertura", args.cobertura),
+      // Chart values are the fallback, never the override: if the caller
+      // corrected their coverage on the call, what they said wins.
+      ...opt("cobertura", args.cobertura || guardado?.cobertura),
       motivo: txt(args.motivo) || "Consulta",
-      ...(typeof args.usaLC === "boolean" ? { usaLC: args.usaLC } : {}),
-      ...opt("comentarios", args.comentarios),
+      ...(typeof args.usaLC === "boolean"
+        ? { usaLC: args.usaLC }
+        : typeof guardado?.usaLC === "boolean"
+          ? { usaLC: guardado.usaLC }
+          : {}),
+      ...opt("comentarios", avisoCanonico(txt(args.comentarios))),
       enviaRecordatorio: args.enviaRecordatorio !== false,
     };
 
@@ -381,6 +419,22 @@ function withTimeout<T>(p: Promise<T>, ms: number) {
   ]);
 }
 
+/**
+ * The interaction warning is a specified string, but the model paraphrases it
+ * every run ("NyQuil" vs "Nyquill", a stray space after the emoji, sometimes a
+ * whole extra sentence). When what it wrote is about this combination, pin it to
+ * the exact wording the chart is supposed to carry. Anything else is left alone.
+ */
+const AVISO_NYQUIL_GLAUCOMA =
+  "⚠️Patient is taking Nyquill (Benadryl) with a previous Glaucoma condition.";
+
+function avisoCanonico(comentarios: string): string {
+  if (!comentarios) return comentarios;
+  const s = comentarios.toLowerCase();
+  const droga = /nyquil|nyquill|benadryl|diphenhydramine|antihistamine/.test(s);
+  return droga && s.includes("glaucoma") ? AVISO_NYQUIL_GLAUCOMA : comentarios;
+}
+
 const txt = (v: unknown) => String(v ?? "").trim();
 const opt = (k: string, v: unknown) => (txt(v) ? { [k]: txt(v) } : {});
 
@@ -419,6 +473,17 @@ interface BuscarPacienteResult {
  * Treelan record so the call keeps its shape; anything else is "not found"
  * rather than a made-up patient.
  */
+/**
+ * What the medical record says once the widget opens it. Hardcoded for the demo
+ * — Treelan's chart page isn't parsed yet, so this is the one place to change
+ * when it is. Everything the agent claims to already know comes from here.
+ */
+const FICHA = {
+  ultimaVisita: "Glaucoma",
+  cobertura: "OSDE",
+  usaLC: false,
+} as const;
+
 const DEMO_PACIENTE: PacienteTreelan = {
   hc: "112708",
   apellido: "DAPONTE",

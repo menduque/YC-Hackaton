@@ -12,19 +12,56 @@
       background: #0b0e14; color: #e6e9ef; display: grid;
       grid-template-columns: 1fr 380px; height: 100vh;
     }
-    header { grid-column: 1 / -1; padding: 14px 22px; border-bottom: 1px solid #1c2230;
-      display: flex; align-items: center; gap: 14px; }
+    header {
+      grid-column: 1 / -1; padding: 12px 22px; border-bottom: 1px solid #1c2230;
+      display: flex; align-items: center; gap: 14px;
+    }
     h1 { font-size: 16px; margin: 0; font-weight: 600; }
-    .dot { width: 10px; height: 10px; border-radius: 50%; background: #556; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #556; transition: background .2s; }
     .dot.on { background: #2ecc71; box-shadow: 0 0 10px #2ecc71; }
     .dot.speaking { background: #3498db; box-shadow: 0 0 10px #3498db; }
     #status { color: #8b93a7; font-size: 13px; }
-    button {
-      font: inherit; font-weight: 600; padding: 9px 18px; border-radius: 8px;
-      border: 0; cursor: pointer; background: #2ecc71; color: #08130b;
+
+    /* --- call button ------------------------------------------------------ */
+    .callctl { display: flex; align-items: center; gap: 14px; }
+    .timer {
+      font: 600 14px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #e6e9ef; min-width: 46px; text-align: right;
+      opacity: 0; transition: opacity .2s;
     }
-    button.stop { background: #e74c3c; color: #fff; }
-    button:disabled { opacity: .5; cursor: default; }
+    .timer.on { opacity: 1; }
+    .calllabel { font-size: 13px; color: #8b93a7; }
+    .callbtn {
+      position: relative; width: 54px; height: 54px; padding: 0; border: 0;
+      border-radius: 50%; cursor: pointer; display: grid; place-items: center;
+      background: #2ecc71; color: #08130b;
+      box-shadow: 0 6px 20px rgba(46, 204, 113, .35);
+      transition: background .18s, box-shadow .18s, transform .12s;
+    }
+    .callbtn:hover { transform: translateY(-1px); box-shadow: 0 8px 24px rgba(46, 204, 113, .45); }
+    .callbtn:active { transform: translateY(0) scale(.95); }
+    .callbtn:focus-visible { outline: 2px solid #7ee2a8; outline-offset: 3px; }
+    .callbtn svg { width: 25px; height: 25px; fill: currentColor; }
+    .callbtn .ico-end { display: none; }
+    /* In call: red, hang-up glyph, and a ring that keeps pulsing so it reads as live. */
+    .callbtn.stop { background: #e74c3c; color: #fff; box-shadow: 0 6px 20px rgba(231, 76, 60, .35); }
+    .callbtn.stop:hover { box-shadow: 0 8px 24px rgba(231, 76, 60, .45); }
+    .callbtn.stop .ico-call { display: none; }
+    .callbtn.stop .ico-end { display: block; }
+    .callbtn.stop::after {
+      content: ""; position: absolute; inset: -7px; border-radius: 50%;
+      border: 2px solid rgba(231, 76, 60, .65); animation: ring 1.6s ease-out infinite;
+      pointer-events: none;
+    }
+    @keyframes ring {
+      0%   { transform: scale(.88); opacity: .9; }
+      100% { transform: scale(1.4);  opacity: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .callbtn.stop::after { animation: none; }
+      .callbtn:hover { transform: none; }
+    }
+
     main { padding: 18px 22px; overflow-y: auto; }
     aside { border-left: 1px solid #1c2230; padding: 18px; overflow-y: auto; background: #0d1119; }
     .msg { margin: 0 0 10px; padding: 9px 13px; border-radius: 10px; max-width: 80%; white-space: pre-wrap; }
@@ -50,7 +87,14 @@
     <h1>Oído · Recepción oftalmológica</h1>
     <span id="status">desconectado</span>
     <span style="flex:1"></span>
-    <button id="btn">Iniciar llamada</button>
+    <div class="callctl">
+      <span class="timer" id="timer">00:00</span>
+      <span class="calllabel" id="calllabel">Llamar</span>
+      <button id="btn" class="callbtn" aria-label="Iniciar llamada" title="Iniciar llamada">
+        <svg class="ico-call" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.62 10.79c1.44 2.83 3.76 5.15 6.59 6.59l2.2-2.2c.28-.28.68-.36 1.02-.25 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+        <svg class="ico-end" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7s.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71s-.11.53-.29.7l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.1-.7-.28-.79-.73-1.68-1.36-2.66-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+      </button>
+    </div>
   </header>
 
   <main>
