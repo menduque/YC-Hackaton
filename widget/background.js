@@ -84,10 +84,10 @@ function ensureBackendWS() {
       reenviarATreelan(msg, () => {});
       return;
     }
-    // Busqueda de paciente: a diferencia de OIDO_SCHEDULE, el backend espera la
-    // respuesta (decide que dice el agente a continuacion), asi que la devolvemos
-    // por el mismo WS correlacionada por id.
-    if (msg.type === 'OIDO_BUSCAR_PACIENTE') {
+    // Busqueda de paciente y lectura de la historia clinica: a diferencia de
+    // OIDO_SCHEDULE, el backend espera la respuesta (con eso decide que dice el
+    // agente), asi que la devolvemos por el mismo WS correlacionada por id.
+    if (msg.type === 'OIDO_BUSCAR_PACIENTE' || msg.type === 'OIDO_LEER_HISTORIA') {
       reenviarATreelan(msg, (res) => {
         const r = res || { ok: false, error: 'sin respuesta del content script' };
         try {
@@ -115,6 +115,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     ensureBackendWS();
     sendResponse({ ok: true });
     return false;
+  }
+  // La ficha que el content script leyo de paciente.php, camino al backend para
+  // que la indexe en Moss. El POST sale de aca y no del content script: la pagina
+  // de Treelan es HTTPS y un fetch a http://localhost se bloquea como mixed
+  // content. Este contexto es chrome-extension://, asi que no.
+  if (msg && msg.type === 'OIDO_HISTORIA') {
+    fetch(`http://localhost:${OIDO_BACKEND_PORT}/v1/pacientes/contexto`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(msg.historia),
+    })
+      .then((r) => r.json())
+      .then((r) => sendResponse(r))
+      .catch((e) => sendResponse({ ok: false, error: (e && e.message) || String(e) }));
+    return true; // respuesta asincrona
   }
   // Veredicto del RPA (content.js -> aca -> backend -> Task en MedPlum). Llega
   // despues de una navegacion completa, asi que el SW pudo haberse dormido y

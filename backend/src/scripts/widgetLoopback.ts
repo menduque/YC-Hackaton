@@ -23,6 +23,62 @@ const FILA = {
   domicilio: "cespedes 1244 1°B",
   estado: "--",
   procedencia: "Barrio",
+  fichaUrl: "paciente.php?p_id=3338b906-1c64-11e6-9f15-94de80a26d48&id=112708",
+};
+
+/** Recorte real de la ficha de Treelan, con la forma que devuelve leerHistoria(). */
+const HISTORIA = {
+  hc: "112708",
+  nombreCompleto: "DAPONTE, Cristobal",
+  apellido: "DAPONTE",
+  nombre: "Cristobal",
+  documento: "41172745",
+  fechaNacimiento: "04-05-1998",
+  edad: "28",
+  telefono: "1136842006",
+  celular: "1136842006",
+  domicilio: "cespedes 1244 1°B - Tigre",
+  cobertura: "OSDE",
+  plan: "310",
+  nroAfiliado: "60814320005",
+  primeraVisita: "17-05-2016",
+  ultimaVisita: "30-06-2026",
+  antecedentes: [
+    { texto: "miopía", desde: "11-06-2026" },
+    { texto: "glaucoma", desde: "11-06-2026" },
+    { texto: "PRUEBA OIDO - BORRAR", desde: "11-06-2026" },
+    { texto: "tratamiento con warfarina", desde: "12-06-2026" },
+    { texto: "diabetes tipo 2", desde: "17-06-2026" },
+    { texto: "traumatismo OI (taponazo, fútbol)", desde: "23-07-2026" },
+  ],
+  consultas: [
+    {
+      fecha: "30-07-2026",
+      hora: "19:54:06",
+      profesional: "DAPONTE, Franco",
+      texto:
+        "Se indico solicitud medica\n- Diagnóstico: H509 - Estrabismo, no especificado\n" +
+        "- Observaciones: AV SC OD 10/20 OI 10/20. BMC sp FO normal AO.",
+    },
+    {
+      fecha: "29-07-2026",
+      hora: "20:23:50",
+      profesional: "DAPONTE, Franco",
+      texto:
+        "Motivo de Consulta: Traumatismo ocular por impacto durante partido de fútbol, " +
+        "pérdida total de visión en OD.\nReposo durante 2 semanas. Hialuronato en gotas, " +
+        "1 gota cada 8 horas durante 2 semanas.",
+    },
+    {
+      fecha: "22-07-2026",
+      hora: "16:28:07",
+      profesional: "DAPONTE, Franco",
+      texto: "Receta Anteojos Lejos. OD 0.00 -0.75 95 / OI 0.00 -0.50 80.\nDiagnóstico: Astigmatismo",
+    },
+  ],
+  secciones: [
+    { titulo: "Quirurgico", texto: "25-02-2026 - Cirujano: ALVAREZ BLANCHET Fernanda" },
+  ],
 };
 
 /** Stands in for Treelan: exact-match on the document, like the real grid. */
@@ -56,6 +112,10 @@ ws.on("message", (data) => {
         result: buscar(msg.payload.dni),
       }),
     );
+  }
+  if (msg.type === "OIDO_LEER_HISTORIA") {
+    console.log(`  ← widget got OIDO_LEER_HISTORIA id=${msg.id}`, msg.payload);
+    ws.send(JSON.stringify({ type: "OIDO_RESULT", id: msg.id, ok: true, result: HISTORIA }));
   }
   if (msg.type === "OIDO_SCHEDULE") {
     schedule = msg.payload;
@@ -101,6 +161,35 @@ ws.on("open", async () => {
   });
   console.log(`   delivered=${turno.result.delivered} faltantes=${JSON.stringify(turno.result.faltantes)}`);
   console.log(`   medplum=${JSON.stringify(turno.result.medplum)}`);
+
+  // Identifying the caller also kicks off the chart read, without awaiting it —
+  // by the time they ask something, it's parsed and indexed.
+  console.log("\n5) obtener_contexto_paciente — resumen, sin decir el documento");
+  const ctx: any = await call("obtener_contexto_paciente", {});
+  console.log(ctx.result.resumen);
+
+  // El agente habla en ingles pero la historia esta en castellano, asi que
+  // manda la pregunta traducida (ver agentConfig).
+  console.log('\n6) obtener_contexto_paciente — "qué me indicó el doctor por el golpe en el ojo"');
+  const rag: any = await call("obtener_contexto_paciente", {
+    consulta: "qué me indicó el doctor por el golpe en el ojo jugando al fútbol",
+  });
+  for (const h of rag.result.relevante) {
+    console.log(`   ${h.score.toFixed(3)} [${h.source ?? "?"}] ${h.text.replace(/\s+/g, " ").slice(0, 110)}…`);
+  }
+  console.log(`   glaucoma en la ficha: ${ctx.result.glaucoma}`);
+
+  // El cruce que nadie hace por telefono: glaucoma en la ficha + un antigripal
+  // que el paciente menciona al pasar.
+  console.log('\n7) medical_interactions — "I picked up DayQuil for a cold"');
+  const inter: any = await call("medical_interactions", {
+    medicamento: "DayQuil",
+    consulta: "I have a cold, is it ok to take it?",
+  });
+  console.log(`   glaucoma_en_historia=${inter.result.glaucoma_en_historia}`);
+  for (const h of inter.result.hallazgos) {
+    console.log(`   ${h.score.toFixed(3)} ${h.text.replace(/\s+/g, " ").slice(0, 130)}…`);
+  }
 
   await new Promise((r) => setTimeout(r, 600));
   console.log("\n   OIDO_SCHEDULE payload the extension would fill into Treelan:");

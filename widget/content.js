@@ -465,10 +465,45 @@
     }
   }
 
+  /**
+   * Si el operador esta parado en la ficha de un paciente, mandamos su historia
+   * al backend para que la indexe. Es el camino "abri la pestania del paciente y
+   * el agente de voz ya lo conoce": cuando entra la llamada, el contexto ya esta.
+   *
+   * Solo lee. No navega, no toca el formulario, y no depende de que haya una
+   * llamada en curso.
+   */
+  function ingestarFichaAbierta() {
+    if (!R.enFicha()) return;
+    if (!(globalThis.chrome && chrome.runtime && chrome.runtime.sendMessage)) return;
+    R.leerHistoria({})
+      .then(
+        (historia) =>
+          new Promise((resolve) => {
+            // El POST va por el service worker: desde esta pagina HTTPS un fetch
+            // a http://localhost se bloquea como mixed content (igual que el WS).
+            chrome.runtime.sendMessage({ type: 'OIDO_HISTORIA', historia }, (res) => {
+              void chrome.runtime.lastError;
+              resolve({ historia, res });
+            });
+          }),
+      )
+      .then(({ historia, res }) => {
+        const cuantas = `${historia.consultas.length} consultas`;
+        if (res && res.ok) {
+          console.log(`[oido] ficha de ${historia.nombreCompleto} indexada (${cuantas})`);
+        } else {
+          console.warn('[oido] el backend no acepto la ficha:', (res && res.error) || 'sin respuesta');
+        }
+      })
+      .catch((e) => console.warn('[oido] no pude leer la ficha abierta:', (e && e.message) || e));
+  }
+
   function iniciar() {
     montar();
     // Un tick para que Treelan termine de armar sus iframes.
     setTimeout(ruta, 400);
+    ingestarFichaAbierta();
   }
 
   if (document.readyState === 'loading') {
@@ -501,6 +536,28 @@
               const err = (e && e.message) || String(e);
               console.warn('[oido] busqueda de paciente fallo:', err);
               log('err', `Busqueda de paciente fallo: ${err}`);
+              sendResponse({ ok: false, error: err });
+            });
+          return true; // respuesta asincrona
+        }
+
+        // Historia clinica: el backend nos pasa la URL de la ficha que salio de
+        // la busqueda y le devolvemos la historia parseada, para que la indexe
+        // en Moss. Tampoco navega: es un fetch same-origin.
+        if (msg && msg.type === 'OIDO_LEER_HISTORIA') {
+          R.leerHistoria(msg.payload || {})
+            .then((historia) => {
+              const linea =
+                `Historia de ${historia.nombreCompleto || historia.hc}: ` +
+                `${historia.consultas.length} consultas, ${historia.antecedentes.length} antecedentes`;
+              console.log('[oido]', linea);
+              log('ok', linea);
+              sendResponse({ ok: true, result: historia });
+            })
+            .catch((e) => {
+              const err = (e && e.message) || String(e);
+              console.warn('[oido] lectura de historia fallo:', err);
+              log('err', `Historia clinica: ${err}`);
               sendResponse({ ok: false, error: err });
             });
           return true; // respuesta asincrona

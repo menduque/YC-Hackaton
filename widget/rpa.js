@@ -17,6 +17,8 @@
   // POST plano, sin onsubmit, asi que no hace falta manejar el DOM ni navegar
   // la pestania — alcanza un fetch same-origin con la sesion ya abierta.
   const PACIENTES_URL = 'pacientes.php';
+  // Ficha del paciente: cabecera + antecedentes + historia clinica completa.
+  const FICHA_URL = 'paciente.php';
   const CAMPO_DNI = 'paciente_dni';
   const CAMPO_APELLIDO = 'paciente_apellido';
   const CAMPO_NOMBRE = 'paciente_nombres';
@@ -455,12 +457,13 @@
 
     return [...tabla.rows]
       .slice(1)
-      .map((tr) =>
+      .map((tr) => ({
+        tr,
         // Treelan intercala celdas espaciadoras vacias entre columna y columna.
-        [...tr.cells].map((td) => td.textContent.trim()).filter((s) => s.length),
-      )
-      .filter((c) => c.length >= 4)
-      .map((c) => {
+        c: [...tr.cells].map((td) => td.textContent.trim()).filter((s) => s.length),
+      }))
+      .filter(({ c }) => c.length >= 4)
+      .map(({ tr, c }) => {
         const nombreCompleto = c[1] || '';
         const coma = nombreCompleto.indexOf(',');
         return {
@@ -473,8 +476,19 @@
           domicilio: c[4] || '',
           estado: c[5] || '',
           procedencia: c[6] || '',
+          fichaUrl: fichaUrlDeFila(tr),
         };
       });
+  }
+
+  /**
+   * La fila de resultados no tiene <a>: Treelan navega desde el onclick,
+   * `Link_Tables('paciente.php?p_id=<uuid>&id=<hc>')`. Esa URL es la ficha
+   * completa del paciente, que es de donde sale la historia clinica.
+   */
+  function fichaUrlDeFila(tr) {
+    const m = /Link_Tables\(\s*'([^']+)'/.exec(tr.getAttribute('onclick') || '');
+    return m && m[1].indexOf(FICHA_URL) === 0 ? m[1] : '';
   }
 
   /**
@@ -510,6 +524,152 @@
 
     const pacientes = parsearResultados(await decodificar(res));
     return { encontrado: pacientes.length > 0, cantidad: pacientes.length, pacientes };
+  }
+
+  // ------------------------------------------------- historia clinica (ficha)
+
+  /** "30-07-2026 19:54:06 - Intervino el Dr. DAPONTE, Franco" */
+  const RE_CONSULTA = /^(\d{2}-\d{2}-\d{4})\s+(\d{2}:\d{2}:\d{2})\s*-\s*Intervino el Dr\.?\s*(.*)$/;
+  /** "tratamiento con warfarina desde: 12-06-2026" */
+  const RE_ANTECEDENTE = /^(.*?)\s+desde:\s*(\d{2}-\d{2}-\d{4})$/;
+
+  const enFicha = () => /\/paciente\.php$/.test(location.pathname);
+
+  /**
+   * Lee la ficha de un paciente y la devuelve estructurada.
+   *
+   * Las siete solapas del paciente (H.C., Ficha, Derivaciones, Diagnosticos,
+   * Protocolos, Quirurgico, Historico) son Spry — puro cliente — asi que el
+   * server las manda TODAS en el mismo HTML. Un solo GET trae la historia
+   * entera: no hay que clickear solapas ni navegar la pestania del operador.
+   *
+   * Sin `url` lee la ficha que ya esta abierta en esta pestania.
+   */
+  async function leerHistoria({ url } = {}) {
+    let doc = document;
+    if (url) {
+      const res = await fetch(url, { credentials: 'include' });
+      if (!res.ok) throw new RpaStop(`Treelan respondio ${res.status} al abrir la ficha`);
+      doc = new DOMParser().parseFromString(await decodificar(res), 'text/html');
+    } else if (!enFicha()) {
+      throw new RpaStop('No hay una ficha de paciente abierta y no se paso una URL');
+    }
+    if (!doc.getElementById('list_hc') && !doc.querySelector('.TabbedPanelsContent')) {
+      throw new RpaStop('La ficha no trajo historia clinica (sesion vencida?)');
+    }
+    return parsearFicha(doc);
+  }
+
+  /**
+   * Texto plano de un nodo. textContent solo pega todo: la ficha separa cada
+   * antecedente y cada renglon de una consulta con <br>, asi que sin esto la
+   * historia sale como un unico parrafo ilegible.
+   */
+  function textoPlano(el) {
+    if (!el) return '';
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll('script,style').forEach((n) => n.remove());
+    clone.querySelectorAll('br').forEach((n) => n.replaceWith('\n'));
+    clone.querySelectorAll('tr,div,p,li,table').forEach((n) => n.append('\n'));
+    return clone.textContent
+      .replace(/\u00a0/g, ' ')
+      .split('\n')
+      .map((l) => l.replace(/[ \t]+/g, ' ').trim())
+      .filter((l) => l.length)
+      .join('\n');
+  }
+
+  function parsearFicha(doc) {
+    const solapas = [...doc.querySelectorAll('.TabbedPanelsTab')];
+    const paneles = [...doc.querySelectorAll('.TabbedPanelsContent')];
+    // El panel 0 (H.C.) es cabecera + antecedentes + las 70 consultas; se parsea
+    // aparte. Del resto guardamos el texto tal cual: son cortos y utiles.
+    const lineas = textoPlano(paneles[0] || doc.body).split('\n');
+
+    return {
+      ...datosDeCabecera(lineas),
+      antecedentes: antecedentesDe(lineas),
+      consultas: consultasDe(doc),
+      secciones: solapas
+        .slice(1)
+        .map((t, i) => ({
+          titulo: t.textContent.replace(/\s+/g, ' ').trim(),
+          texto: textoPlano(paneles[i + 1]),
+        }))
+        .filter((s) => s.titulo && s.texto),
+      leidoEn: new Date().toISOString(),
+    };
+  }
+
+  /** Cabecera de la H.C.: "HC: 112708 - DAPONTE, Cristobal", cobertura, etc. */
+  function datosDeCabecera(lineas) {
+    const cab = lineas.slice(0, 25).join('\n');
+    const uno = (re) => {
+      const m = re.exec(cab);
+      return m ? (m[1] || '').trim() : '';
+    };
+    const nombreCompleto = uno(/^HC:\s*\d+\s*-\s*(.+)$/m);
+    const coma = nombreCompleto.indexOf(',');
+    return {
+      hc: uno(/^HC:\s*(\d+)/m),
+      nombreCompleto,
+      apellido: coma >= 0 ? nombreCompleto.slice(0, coma).trim() : nombreCompleto,
+      nombre: coma >= 0 ? nombreCompleto.slice(coma + 1).trim() : '',
+      documento: uno(/^DNI:\s*([\d.]+)/m).replace(/\./g, ''),
+      fechaNacimiento: uno(/Fecha de Nacimiento:\s*([\d-]+)/),
+      edad: uno(/Edad:\s*(\d+)/),
+      telefono: uno(/^Tel[eé]fono:\s*([^\n-]*)/m),
+      celular: uno(/Cel:\s*([^\n]*)/),
+      domicilio: uno(/^Domicilio:\s*(.+)$/m),
+      cobertura: uno(/^Cobertura:\s*(.*?)(?:\s+Plan:|$)/m),
+      plan: uno(/Plan:\s*(\S+)/),
+      nroAfiliado: uno(/Nro Afiliado:\s*(\S+)/),
+      primeraVisita: uno(/Primera Visita:\s*([\d-]+)/),
+      ultimaVisita: uno(/Ultima Visita:\s*([\d-]+)/),
+    };
+  }
+
+  /** Lo que cuelga de "ANTECEDENTES PERSONALES Y FAMILIARES", hasta la 1a consulta. */
+  function antecedentesDe(lineas) {
+    const desde = lineas.findIndex((l) => /ANTECEDENTES PERSONALES/i.test(l));
+    if (desde < 0) return [];
+    const out = [];
+    for (const l of lineas.slice(desde + 1)) {
+      if (RE_CONSULTA.test(l)) break;
+      const m = RE_ANTECEDENTE.exec(l);
+      if (m) out.push({ texto: m[1].trim(), desde: m[2] });
+    }
+    return out;
+  }
+
+  /**
+   * #list_hc es una lista plana, no anidada: <input><hr><b>fecha - Intervino el
+   * Dr. X</b><br><div class="item_hc">…</div> repetido. Cada <b> con fecha abre
+   * una consulta y todo lo que sigue le pertenece hasta el proximo <b>.
+   */
+  function consultasDe(doc) {
+    const list = doc.getElementById('list_hc');
+    if (!list) return [];
+    const consultas = [];
+    let actual = null;
+    for (const el of list.children) {
+      if (el.tagName === 'B') {
+        const m = RE_CONSULTA.exec(el.textContent.replace(/\s+/g, ' ').trim());
+        if (m) {
+          actual = { fecha: m[1], hora: m[2], profesional: m[3].trim(), texto: '' };
+          consultas.push(actual);
+          continue;
+        }
+      }
+      if (!actual || el.tagName === 'INPUT' || el.tagName === 'HR' || el.tagName === 'BR') continue;
+      // "ver" es el link que despliega la consulta: es UI, no historia.
+      const texto = textoPlano(el)
+        .split('\n')
+        .filter((l) => l !== 'ver')
+        .join('\n');
+      if (texto) actual.texto = actual.texto ? `${actual.texto}\n${texto}` : texto;
+    }
+    return consultas;
   }
 
   /** Cancelar de Treelan: recarga el panel vacio. No agenda nada. */
@@ -551,5 +711,8 @@
     resetPanel,
     buscarPaciente,
     parsearResultados,
+    enFicha,
+    leerHistoria,
+    parsearFicha,
   };
 })();

@@ -10,12 +10,29 @@ import { dispatchFunction } from "./functions/index.js";
 import { AGENT_FUNCTIONS } from "./deepgram/agentConfig.js";
 import { bridgeBrowserToDeepgram } from "./deepgram/bridge.js";
 import { agendaCompleta, normalizarFecha, reemplazarDia } from "./agenda/daponte.js";
+import { consultarHistoria, guardarHistoria, historiaDe, resumenHistoria } from "./session/historias.js";
+import type { HistoriaTreelan } from "./session/historias.js";
 import type { TurnoPayload } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const app = express();
-app.use(express.json());
+// 2mb: una ficha de Treelan con 70 consultas ronda los 100kb de JSON, justo el
+// default de express.json().
+app.use(express.json({ limit: "2mb" }));
+
+// El service worker de la extension postea desde un origen chrome-extension://,
+// asi que el POST de la ficha se come un preflight. Esto es un server de dev en
+// localhost: mas barato abrirlo que pelearse con CORS.
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
 
 // Serve the mic control panel at /
 app.use(express.static(join(__dirname, "..", "..", "panel")));
@@ -46,6 +63,34 @@ app.post("/v1/agenda/:fecha", (req, res) => {
     return;
   }
   res.json({ ok: true, dia: reemplazarDia(fecha, slots) });
+});
+
+// The Treelan tab pushes a patient chart here whenever the operator opens one.
+// That's the "read the patient tab → the voice agent knows them" path: by the
+// time the phone rings, the chart is already chunked and indexed in Moss.
+app.post("/v1/pacientes/contexto", async (req, res) => {
+  try {
+    res.json({ ok: true, ...(await guardarHistoria(req.body as HistoriaTreelan)) });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: (err as Error).message });
+  }
+});
+
+// What the agent would see for a patient, without making a call. Add ?q=… to
+// exercise the retrieval instead of just the summary.
+app.get("/v1/pacientes/:documento/contexto", async (req, res) => {
+  const documento = String(req.params.documento);
+  const historia = historiaDe(documento);
+  if (!historia) {
+    res.status(404).json({ ok: false, error: "No hay historia cargada para ese documento" });
+    return;
+  }
+  const q = req.query.q ? String(req.query.q) : "";
+  res.json({
+    ok: true,
+    resumen: resumenHistoria(historia),
+    relevante: q ? await consultarHistoria(documento, q) : [],
+  });
 });
 
 // Manual trigger for testing the widget without a live call:

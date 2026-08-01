@@ -4,6 +4,16 @@ import { moss } from "../clients/moss.js";
 import { pushSchedule, requestWidget } from "../ws/widgetHub.js";
 import { recordado, recordar, recordarPatientId } from "../session/pacientes.js";
 import {
+  consultarHistoria,
+  guardarHistoria,
+  hayHistoria,
+  historiaDe,
+  normalizarDoc,
+  resumenHistoria,
+} from "../session/historias.js";
+import type { HistoriaTreelan } from "../session/historias.js";
+import { FUENTE, buscarInteracciones, mencionaGlaucoma } from "../kb/glaucoma.js";
+import {
   DOCTOR,
   diaDeAgenda,
   estadoDeSlot,
@@ -202,6 +212,7 @@ export const handlers: Record<string, Handler> = {
       fechaNacimiento: p.fechaNacimiento,
       domicilio: p.domicilio,
       procedencia: p.procedencia,
+      fichaUrl: p.fichaUrl,
     });
     // Best data we'll ever have on this caller — surname, given name, DOB and
     // address straight off the chart rather than out of a speech transcript.
@@ -218,6 +229,11 @@ export const handlers: Record<string, Handler> = {
       p.hc,
     );
 
+    // La ficha completa (70 consultas) tarda ~1s en leerse e indexarse. Se
+    // dispara acá y no se espera: para cuando el paciente pregunte algo de su
+    // historia ya va a estar en Moss, y mientras tanto el agente saluda.
+    void precargarHistoria(ctx.callId, p);
+
     return {
       encontrado: true,
       nombre: p.nombre,
@@ -233,12 +249,117 @@ export const handlers: Record<string, Handler> = {
     };
   },
 
-  async obtener_contexto_paciente(args: { documento: string }) {
-    const [history, fhir] = await Promise.allSettled([
-      moss.retrieve(`historia paciente documento ${args.documento}`),
-      medplum.getPatientContext(args.documento),
+  /**
+   * La historia clinica del que llama, leida de su ficha de Treelan e indexada
+   * en Moss (session/historias.ts).
+   *
+   * Devuelve dos cosas distintas a propósito: `resumen` es quién es el paciente
+   * — sale sin consultar nada — y `relevante` son los pedazos de la historia que
+   * contestan lo que preguntó. Sin `consulta` no hay retrieval: si el agente
+   * solo quiere orientarse, no hace falta pagar una búsqueda.
+   */
+  async obtener_contexto_paciente(
+    args: { documento?: string; consulta?: string },
+    ctx,
+  ) {
+    const guardado = recordado(ctx.callId);
+    const documento = normalizarDoc(args?.documento) || guardado?.documento || "";
+    if (!documento) {
+      return {
+        ok: false,
+        instruccion:
+          "You don't know who this is yet. Ask for their ID number and call buscar_paciente first.",
+      };
+    }
+
+    // Si la precarga todavía no terminó (o el paciente se identificó antes de
+    // que hubiera widget), leer la ficha ahora: es la última chance de tener
+    // historia para esta pregunta.
+    if (!hayHistoria(documento) && guardado?.fichaUrl) {
+      await precargarHistoria(ctx.callId, {
+        dni: documento,
+        fichaUrl: guardado.fichaUrl,
+        nombreCompleto: guardado.nombreCompleto,
+      });
+    }
+
+    const historia = historiaDe(documento);
+    const consulta = txt(args?.consulta);
+    const [relevante, fhir] = await Promise.allSettled([
+      consulta ? consultarHistoria(documento, consulta) : Promise.resolve([]),
+      medplum.getPatientContext(documento),
     ]);
-    return { history, fhir };
+
+    // El agente no puede "detectar" glaucoma en un antecedente que nunca vio.
+    // Si esta en la ficha, se lo decimos explicitamente junto con que hacer.
+    const glaucoma = glaucomaEnHistoria(historia);
+
+    return {
+      ok: true,
+      encontrado: Boolean(historia),
+      glaucoma,
+      resumen: historia ? resumenHistoria(historia) : null,
+      relevante: relevante.status === "fulfilled" ? relevante.value : [],
+      fhir: fhir.status === "fulfilled" ? fhir.value : null,
+      instruccion: !historia
+        ? "No chart loaded for this caller. Don't invent history — just book the appointment."
+        : "The chart is in Spanish — answer the caller in English. Use it to sound like you " +
+          "know them (their last visit, what the doctor indicated), one or two sentences max. " +
+          "Never read the chart out loud, never quote chart numbers, and never give medical " +
+          "advice or interpret findings: that is what the visit with Dr. Daponte is for." +
+          (glaucoma
+            ? " This patient HAS GLAUCOMA on their chart. If any medication comes up at all — " +
+              "something they take, something they just bought over the counter, something " +
+              "another doctor started them on — call medical_interactions with it."
+            : ""),
+    };
+  },
+
+  /**
+   * Medicaciones riesgosas en glaucoma (kb/glaucoma.ts, indexado en Moss).
+   *
+   * Un glaucoma en la ficha mas un antihistaminico que el paciente menciona al
+   * pasar es exactamente el cruce que nadie hace por telefono: la recepcion no
+   * lee la historia y el paciente no sabe que preguntar. Esto NO le dice al
+   * paciente que hacer con su medicacion — lo marca para el medico y lo deja
+   * escrito en la ficha.
+   */
+  async medical_interactions(
+    args: { medicamento?: string; consulta?: string },
+    ctx,
+  ) {
+    const medicamento = txt(args?.medicamento);
+    const consulta = [medicamento, txt(args?.consulta)].filter(Boolean).join(" ");
+    if (!consulta) {
+      return {
+        ok: false,
+        instruccion:
+          "Ask which medication they mean — the brand name is fine (Benadryl, DayQuil, Claritin) — " +
+          "and call this again.",
+      };
+    }
+
+    const documento = recordado(ctx.callId)?.documento ?? "";
+    const enHistoria = glaucomaEnHistoria(documento ? historiaDe(documento) : undefined);
+    const hits = await buscarInteracciones(consulta, 4);
+
+    return {
+      ok: true,
+      medicamento: medicamento || null,
+      glaucoma_en_historia: enHistoria,
+      hallazgos: hits,
+      fuente: FUENTE,
+      instruccion: !hits.length
+        ? "Nothing on that one in the guidance. Say you don't have anything on it and that " +
+          "Dr. Daponte can check it at the visit. Do NOT tell them it's safe."
+        : "Say it in ONE sentence, as a heads-up, not a diagnosis: this is something to raise " +
+          "with Dr. Daponte before taking it. NEVER tell them to start, stop or change a " +
+          "medication, and never tell them a medication is safe. Then put it in 'comentarios' " +
+          "when you call preparar_turno, so the doctor sees it before the visit — that note is " +
+          "the point of this. If the answer mentions warning signs of an angle-closure attack " +
+          "(eye pain, halos, nausea, foggy vision) and the caller has any of them, tell them to " +
+          "go to an emergency room now instead of waiting for the appointment.",
+    };
   },
 
   async investigar_problema(args: { sintoma: string; contexto?: string }) {
@@ -392,6 +513,54 @@ export const handlers: Record<string, Handler> = {
     };
   },
 };
+
+/**
+ * Does the chart say glaucoma? Looks at the antecedentes and at the diagnoses in
+ * the recent consultations — Treelan writes it in either place.
+ */
+function glaucomaEnHistoria(historia?: HistoriaTreelan): boolean {
+  if (!historia) return false;
+  return (
+    (historia.antecedentes ?? []).some((a) => mencionaGlaucoma(a.texto)) ||
+    (historia.consultas ?? []).slice(0, 10).some((c) => mencionaGlaucoma(c.texto))
+  );
+}
+
+/**
+ * Reads the caller's chart out of Treelan and indexes it, so the voice agent can
+ * retrieve from it mid-call. The browser does the reading — same as the patient
+ * lookup, the Treelan session lives there and the backend has no credentials.
+ *
+ * Never throws: a chart that fails to load costs the agent some context, not the
+ * call. Returns whether it landed, for the callers that want to know.
+ */
+async function precargarHistoria(
+  callId: string,
+  p: { dni: string; fichaUrl?: string; nombreCompleto?: string },
+): Promise<boolean> {
+  if (!p.fichaUrl) return false;
+  try {
+    // 20s: the chart is ~35k characters of ISO-8859-1 HTML and Treelan is not fast.
+    const historia = await requestWidget<HistoriaTreelan>(
+      callId,
+      "OIDO_LEER_HISTORIA",
+      { url: p.fichaUrl },
+      20000,
+    );
+    const res = await guardarHistoria({
+      ...historia,
+      documento: normalizarDoc(historia?.documento) || p.dni,
+    });
+    console.log(
+      `[historia] ${res.paciente || p.nombreCompleto} — ${res.consultas} consultas, ` +
+        `${res.docs} docs → ${res.index}${res.moss ? " (Moss)" : " (sin Moss)"}`,
+    );
+    return true;
+  } catch (err) {
+    console.warn(`[historia] no se pudo cargar la ficha: ${(err as Error).message}`);
+    return false;
+  }
+}
 
 /**
  * How long preparar_turno will wait on MedPlum before handing the RPA the
@@ -566,6 +735,8 @@ interface PacienteTreelan {
   domicilio: string;
   estado: string;
   procedencia: string;
+  /** `paciente.php?p_id=…&id=…`, sacada del onclick de la fila. Puede faltar. */
+  fichaUrl?: string;
 }
 
 interface BuscarPacienteResult {
@@ -589,6 +760,7 @@ const DEMO_PACIENTE: PacienteTreelan = {
   domicilio: "cespedes 1244 1°B",
   estado: "--",
   procedencia: "Barrio",
+  fichaUrl: "paciente.php?p_id=3338b906-1c64-11e6-9f15-94de80a26d48&id=112708",
 };
 
 function fallbackPaciente(dni: string): PacienteTreelan | null {

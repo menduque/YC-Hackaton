@@ -8,6 +8,7 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "moss:index": "tsx src/scripts/mossIndex.ts",
+    "moss:interacciones": "tsx src/scripts/mossInteracciones.ts",
     "vendortest": "tsx src/scripts/vendortest.ts"
   },
   "dependencies": {
