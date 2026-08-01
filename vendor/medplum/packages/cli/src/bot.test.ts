@@ -1,0 +1,575 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import { allOk, notFound } from '@medplum/core';
+import type { Bot } from '@medplum/fhirtypes';
+import { MockClient } from '@medplum/mock';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import type { Mock, MockInstance } from 'vitest';
+import * as cli from '.';
+import { createMedplumClient } from './util/client';
+
+const { main } = cli;
+
+vi.mock('./util/client');
+vi.mock('node:fs', () => {
+  const mock = {
+    existsSync: vi.fn(),
+    readFileSync: vi.fn(),
+    writeFileSync: vi.fn(),
+    constants: {
+      O_CREAT: 0,
+    },
+    promises: {
+      readFile: vi.fn(async () => '{}'),
+    },
+  };
+  return { default: mock, ...mock };
+});
+
+describe('CLI Bots', () => {
+  const env = process.env;
+  let medplum: MockClient;
+  let processError: MockInstance;
+
+  beforeAll(() => {
+    process.exit = vi.fn<(exitCode?: number) => never>().mockImplementation(function exit(exitCode?: number) {
+      throw new Error(`Process exited with exit code ${exitCode}`);
+    });
+    processError = vi.spyOn(process.stderr, 'write').mockImplementation(vi.fn());
+  });
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    process.env = { ...env };
+    medplum = new MockClient();
+    console.log = vi.fn();
+
+    (createMedplumClient as unknown as Mock).mockImplementation(async () => medplum);
+  });
+
+  afterEach(() => {
+    process.env = env;
+  });
+
+  test('Deploy bot missing name', async () => {
+    await expect(main(['node', 'index.js', 'bot', 'deploy'])).rejects.toThrow('Process exited with exit code 1');
+    expect(processError).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("error: missing required argument 'botName'")
+    );
+  });
+
+  test('Deploy bot config not found', async () => {
+    const id = randomUUID();
+
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [
+          {
+            name: 'hello-world',
+            id: id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+        ],
+      })
+    );
+    await expect(main(['node', 'index.js', 'bot', 'deprecate', 'does-not-exist'])).rejects.toThrow(
+      'Process exited with exit code 1'
+    );
+    expect(processError).toHaveBeenCalledWith(expect.stringContaining(`error: unknown command 'deprecate'`));
+  });
+
+  test('Deploy bot not found', async () => {
+    const id = randomUUID();
+
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [
+          {
+            name: 'hello-world',
+            id: id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+        ],
+      })
+    );
+
+    await expect(main(['node', 'index.js', 'bot', 'deploy', 'hello-world'])).rejects.toThrow(
+      'Process exited with exit code 1'
+    );
+    expect(processError).toHaveBeenCalledWith(
+      expect.stringContaining('Error: 1 bot(s) had failures. Bots with failures:')
+    );
+  });
+
+  test('Save bot success', async () => {
+    // Create the bot
+    const bot = await medplum.createResource<Bot>({ resourceType: 'Bot' });
+    expect(bot.code).toBeUndefined();
+
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [
+          {
+            name: 'hello-world',
+            id: bot.id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+        ],
+      })
+    );
+
+    await main(['node', 'index.js', 'bot', 'save', 'hello-world']);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Success/));
+    const check = await medplum.readResource('Bot', bot.id);
+    expect(check.code).toBeUndefined();
+    expect(check.sourceCode).toBeDefined();
+  });
+
+  test('Deploy bot success', async () => {
+    medplum.router.router.add('POST', 'Bot/:id/$deploy', async () => [allOk]);
+
+    // Create the bot
+    const bot = await medplum.createResource<Bot>({ id: randomUUID(), resourceType: 'Bot' });
+    expect(bot.code).toBeUndefined();
+
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [
+          {
+            name: 'hello-world',
+            id: bot.id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+        ],
+      })
+    );
+
+    await main(['node', 'index.js', 'bot', 'deploy', 'hello-world']);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Success/));
+    const check = await medplum.readResource('Bot', bot.id);
+    expect(check.code).toBeUndefined();
+    expect(check.sourceCode).toBeDefined();
+  });
+
+  test('Deploy bot without dist success', async () => {
+    medplum.router.router.add('POST', 'Bot/:id/$deploy', async () => [allOk]);
+
+    // Create the bot
+    const bot = await medplum.createResource<Bot>({ resourceType: 'Bot' });
+    expect(bot.code).toBeUndefined();
+
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [
+          {
+            name: 'hello-world',
+            id: bot.id,
+            source: 'src/hello-world.ts',
+          },
+        ],
+      })
+    );
+
+    await main(['node', 'index.js', 'bot', 'deploy', 'hello-world']);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Success/));
+    const check = await medplum.readResource('Bot', bot.id);
+    expect(check.code).toBeUndefined();
+    expect(check.sourceCode).toBeDefined();
+  });
+
+  test('Deploy bot fails when deploy operation returns an error outcome', async () => {
+    medplum.router.router.add('POST', 'Bot/:id/$deploy', async () => [notFound]);
+
+    const bot = await medplum.createResource<Bot>({ id: randomUUID(), resourceType: 'Bot' });
+
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [
+          {
+            name: 'hello-world',
+            id: bot.id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+        ],
+      })
+    );
+
+    await expect(main(['node', 'index.js', 'bot', 'deploy', 'hello-world'])).rejects.toThrow(
+      'Process exited with exit code 1'
+    );
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Number of bots deployed: 0/));
+    expect(processError).toHaveBeenCalledWith(
+      expect.stringContaining('Error: 1 bot(s) had failures. Bots with failures:')
+    );
+  });
+
+  test('Deploy bot for multiple bot with wildcards ', async () => {
+    medplum.router.router.add('POST', 'Bot/:id/$deploy', async () => [allOk]);
+
+    // Create the bot
+    const bot = await medplum.createResource<Bot>({ resourceType: 'Bot' });
+    const bot2 = await medplum.createResource<Bot>({ resourceType: 'Bot' });
+
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [
+          {
+            name: 'hello-world-staging',
+            id: bot.id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+          {
+            name: 'hello-world-2-staging',
+            id: bot2.id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+        ],
+      })
+    );
+
+    await main(['node', 'index.js', 'bot', 'deploy', 'he**llo*']);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Success/));
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Number of bots deployed: 2/));
+  });
+
+  test('Deploy bot multiple bot ending with bot name that has no match', async () => {
+    // Create the bot
+    const bot = await medplum.createResource<Bot>({ resourceType: 'Bot' });
+    const bot2 = await medplum.createResource<Bot>({ resourceType: 'Bot' });
+
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [
+          {
+            name: 'hello-world',
+            id: bot.id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+          {
+            name: 'hello-world-2',
+            id: bot2.id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+        ],
+      })
+    );
+
+    await main(['node', 'index.js', 'bot', 'deploy', '*-staging']);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Number of bots deployed: 0/));
+  });
+
+  test('Deploy bot multiple bot ending with bot name with no config', async () => {
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(false);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(undefined);
+
+    await main(['node', 'index.js', 'bot', 'deploy', '*-staging']);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Number of bots deployed: 0/));
+  });
+
+  test('Create bot command success with existing config file', async () => {
+    medplum.router.router.add('POST', 'Bot/:id/$deploy', async () => [allOk]);
+
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [],
+      })
+    );
+
+    await main(['node', 'index.js', 'bot', 'create', 'test-bot', '1', 'src/hello-world.ts', 'dist/src/hello-world.ts']);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching('Success! Bot created:'));
+    expect(fs.existsSync).toHaveBeenCalled();
+    expect(fs.readFileSync).toHaveBeenCalled();
+  });
+
+  test('Create bot command success without existing config file', async () => {
+    // No bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(false);
+    (fs.readFileSync as unknown as Mock).mockReturnValue('');
+
+    await main(['node', 'index.js', 'bot', 'create', 'test-bot', '1', 'src/hello-world.ts', 'dist/src/hello-world.ts']);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching('Success! Bot created:'));
+    expect(fs.existsSync).toHaveBeenCalled();
+    expect(fs.readFileSync).not.toHaveBeenCalled();
+  });
+
+  test('Create bot command with auth options', async () => {
+    // No bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(false);
+    (fs.readFileSync as unknown as Mock).mockReturnValue('');
+
+    await main([
+      'node',
+      'index.js',
+      'bot',
+      'create',
+      'test-bot',
+      '1',
+      'src/hello-world.ts',
+      'dist/src/hello-world.ts',
+      '--base-url',
+      'http://localhost:8000',
+      '--client-id',
+      'test-client-id',
+      '--client-secret',
+      'test-client-secret',
+    ]);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching('Success! Bot created:'));
+    expect(fs.existsSync).toHaveBeenCalled();
+    expect(fs.readFileSync).not.toHaveBeenCalled();
+  });
+
+  test('Create bot error with lack of commands', async () => {
+    await expect(main(['node', 'index.js', 'bot', 'create', 'test-bot'])).rejects.toThrow(
+      'Process exited with exit code 1'
+    );
+    expect(processError).toHaveBeenCalledWith(expect.stringContaining("error: missing required argument 'projectId'"));
+  });
+
+  test('Create bot do not write to config', async () => {
+    // No bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(false);
+    (fs.readFileSync as unknown as Mock).mockReturnValue('');
+    (fs.writeFileSync as unknown as Mock).mockImplementation(() => {});
+
+    await main([
+      'node',
+      'index.js',
+      'bot',
+      'create',
+      'test-bot',
+      '1',
+      'src/hello-world.ts',
+      'dist/src/hello-world.ts',
+      '--no-write-config',
+    ]);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching('Success! Bot created:'));
+    expect(fs.existsSync).toHaveBeenCalled();
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  // Deprecated bot commands
+
+  test('Deprecate Deploy bot missing name', async () => {
+    await expect(main(['node', 'index.js', 'deploy-bot'])).rejects.toThrow('Process exited with exit code 1');
+    expect(processError).toHaveBeenCalledWith(expect.stringContaining(`error: missing required argument 'botName'`));
+  });
+
+  test('Deprecate Deploy bot config not found', async () => {
+    const id = randomUUID();
+
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [
+          {
+            name: 'hello-world',
+            id: id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+        ],
+      })
+    );
+
+    await main(['node', 'index.js', 'deploy-bot', 'does-not-exist']);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Number of bots deployed: 0/));
+  });
+
+  test('Deprecate Deploy bot not found', async () => {
+    const id = randomUUID();
+
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [
+          {
+            name: 'hello-world',
+            id: id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+        ],
+      })
+    );
+    await expect(main(['node', 'index.js', 'deploy-bot', 'hello-world'])).rejects.toThrow(
+      'Process exited with exit code 1'
+    );
+    expect(processError).toHaveBeenCalledWith(
+      expect.stringContaining('Error: 1 bot(s) had failures. Bots with failures:')
+    );
+  });
+
+  test('Deprecate Save bot success', async () => {
+    // Create the bot
+    const bot = await medplum.createResource<Bot>({ resourceType: 'Bot' });
+    expect(bot.code).toBeUndefined();
+
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [
+          {
+            name: 'hello-world',
+            id: bot.id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+        ],
+      })
+    );
+
+    await main(['node', 'index.js', 'save-bot', 'hello-world']);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Success/));
+    const check = await medplum.readResource('Bot', bot.id);
+    expect(check.code).toBeUndefined();
+    expect(check.sourceCode).toBeDefined();
+  });
+
+  test('Deprecate Deploy bot success', async () => {
+    medplum.router.router.add('POST', 'Bot/:id/$deploy', async () => [allOk]);
+
+    // Create the bot
+    const bot = await medplum.createResource<Bot>({ resourceType: 'Bot' });
+    expect(bot.code).toBeUndefined();
+
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [
+          {
+            name: 'hello-world',
+            id: bot.id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+        ],
+      })
+    );
+
+    await main(['node', 'index.js', 'deploy-bot', 'hello-world']);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Success/));
+    const check = await medplum.readResource('Bot', bot.id);
+    expect(check.code).toBeUndefined();
+    expect(check.sourceCode).toBeDefined();
+  });
+
+  test('Deprecate Deploy bot for multiple bot with wildcards ', async () => {
+    medplum.router.router.add('POST', 'Bot/:id/$deploy', async () => [allOk]);
+
+    // Create the bot
+    const bot = await medplum.createResource<Bot>({ resourceType: 'Bot' });
+    const bot2 = await medplum.createResource<Bot>({ resourceType: 'Bot' });
+
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [
+          {
+            name: 'hello-world-staging',
+            id: bot.id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+          {
+            name: 'hello-world-2-staging',
+            id: bot2.id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+        ],
+      })
+    );
+
+    await main(['node', 'index.js', 'deploy-bot', 'he**llo*']);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Success/));
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Number of bots deployed: 2/));
+  });
+
+  test('Deprecate Deploy bot multiple bot ending with bot name that has no match', async () => {
+    // Create the bot
+    const bot = await medplum.createResource<Bot>({ resourceType: 'Bot' });
+    const bot2 = await medplum.createResource<Bot>({ resourceType: 'Bot' });
+
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(true);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(
+      JSON.stringify({
+        bots: [
+          {
+            name: 'hello-world',
+            id: bot.id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+          {
+            name: 'hello-world-2',
+            id: bot2.id,
+            source: 'src/hello-world.ts',
+            dist: 'dist/hello-world.js',
+          },
+        ],
+      })
+    );
+
+    await main(['node', 'index.js', 'deploy-bot', '*-staging']);
+
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Number of bots deployed: 0/));
+  });
+
+  test('Deprecate Deploy bot multiple bot ending with bot name with no config', async () => {
+    // Setup bot config
+    (fs.existsSync as unknown as Mock).mockReturnValue(false);
+    (fs.readFileSync as unknown as Mock).mockReturnValue(undefined);
+
+    await main(['node', 'index.js', 'deploy-bot', '*-staging']);
+    expect(console.log).not.toHaveBeenCalledWith(expect.stringMatching(/Success/));
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/Number of bots deployed: 0/));
+  });
+
+  test('Deprecate Create bot command success', async () => {
+    await main(['node', 'index.js', 'create-bot', 'test-bot', '1', 'src/hello-world.ts', 'dist/src/hello-world.ts']);
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching('Success! Bot created:'));
+  });
+
+  test('Deprecate Create bot error with lack of commands', async () => {
+    await expect(main(['node', 'index.js', 'create-bot', 'test-bot'])).rejects.toThrow(
+      'Process exited with exit code 1'
+    );
+    expect(processError).toHaveBeenCalledWith(expect.stringContaining("error: missing required argument 'projectId'"));
+  });
+});

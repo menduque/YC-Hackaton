@@ -1,0 +1,260 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { ReleaseManifest } from '@medplum/core';
+import { MEDPLUM_RELEASES_URL, clearReleaseCache } from '@medplum/core';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { platform } from 'node:os';
+import { resolve } from 'node:path';
+import { buildManifest } from './upgrader-test-utils';
+import { downloadRelease, getReleaseBinPath, parseDownloadUrl } from './upgrader-utils';
+
+const ALL_PLATFORMS_LIST = ['win32', 'linux', 'darwin'];
+const VALID_PLATFORMS_LIST = ['win32', 'linux'];
+
+describe.each(ALL_PLATFORMS_LIST)('Upgrader Utils -- All Platforms -- %s', (_platform) => {
+  beforeEach(() => {
+    vi.mocked(platform).mockReturnValue(_platform as NodeJS.Platform);
+  });
+
+  test('parseDownloadUrl', () => {
+    const manifest = buildManifest('4.2.4');
+    expect(parseDownloadUrl(manifest, 'win32')).toStrictEqual('https://example.com/win32');
+    expect(parseDownloadUrl(manifest, 'linux')).toStrictEqual('https://example.com/linux');
+    expect(() => parseDownloadUrl(manifest, 'darwin')).toThrow('Unsupported platform: darwin');
+  });
+
+  test('parseDownloadUrl -- missing artifact for platform', () => {
+    const manifestOnlyWindows = {
+      tag_name: 'v4.2.5',
+      assets: [
+        {
+          name: 'medplum-agent-installer-4.2.5-windows.exe',
+          browser_download_url: 'https://example.com/win32',
+        },
+      ],
+    } satisfies ReleaseManifest;
+    const manifestOnlyLinux = {
+      tag_name: 'v4.2.5',
+      assets: [
+        {
+          name: 'medplum-agent-4.2.5-linux',
+          browser_download_url: 'https://example.com/linux',
+        },
+      ],
+    } satisfies ReleaseManifest;
+    const emptyManifest = {
+      tag_name: 'v4.2.5',
+      assets: [],
+    } satisfies ReleaseManifest;
+
+    expect(() => parseDownloadUrl(manifestOnlyWindows, 'linux')).toThrow(
+      "No download URL found for release 'v4.2.5' for linux"
+    );
+    expect(() => parseDownloadUrl(manifestOnlyLinux, 'win32')).toThrow(
+      "No download URL found for release 'v4.2.5' for win32"
+    );
+    expect(() => parseDownloadUrl(emptyManifest, 'win32')).toThrow(
+      "No download URL found for release 'v4.2.5' for win32"
+    );
+  });
+
+  test('getReleaseBinPath', () => {
+    switch (_platform) {
+      case 'win32':
+        expect(getReleaseBinPath('4.2.4')).toStrictEqual(resolve(__dirname, 'medplum-agent-installer-4.2.4.exe'));
+        break;
+      case 'linux':
+        expect(getReleaseBinPath('4.2.4')).toStrictEqual(resolve(__dirname, 'medplum-agent-4.2.4-linux'));
+        break;
+      default:
+        expect(() => getReleaseBinPath('4.2.4')).toThrow('Unsupported platform: darwin');
+    }
+  });
+});
+
+describe.each(VALID_PLATFORMS_LIST)('Upgrader Utils -- Valid Platforms -- %s', (_platform) => {
+  beforeEach(() => {
+    vi.mocked(platform).mockReturnValue(_platform as NodeJS.Platform);
+  });
+
+  describe('downloadRelease', () => {
+    beforeAll(() => {
+      if (!existsSync(resolve(__dirname, 'tmp'))) {
+        mkdirSync(resolve(__dirname, 'tmp'));
+      }
+    });
+
+    afterAll(() => {
+      rmSync(resolve(__dirname, 'tmp'), { recursive: true, force: true });
+    });
+
+    beforeEach(() => {
+      clearReleaseCache();
+    });
+
+    test('Happy path', async () => {
+      const manifest = buildManifest('4.2.4');
+
+      let count = 0;
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+        vi.fn(async (): Promise<Response> => {
+          return new Promise<Response>((resolve) => {
+            switch (count) {
+              case 0:
+                count++;
+                resolve(
+                  new Response(JSON.stringify(manifest), {
+                    headers: { 'content-type': 'application/json' },
+                    status: 200,
+                  })
+                );
+                break;
+              case 1:
+                count++;
+                resolve(
+                  new Response(
+                    new ReadableStream({
+                      start(controller) {
+                        const textEncoder = new TextEncoder();
+                        const chunks: Uint8Array[] = [
+                          textEncoder.encode('Hello'),
+                          textEncoder.encode(', '),
+                          textEncoder.encode('Medplum!'),
+                        ];
+
+                        let streamIdx = 0;
+
+                        // The following function handles each data chunk
+                        function push(): void {
+                          if (streamIdx === chunks.length) {
+                            controller.close();
+                            return;
+                          }
+                          controller.enqueue(chunks[streamIdx]);
+                          streamIdx++;
+                          push();
+                        }
+
+                        push();
+                      },
+                    }),
+                    {
+                      status: 200,
+                      headers: { 'content-type': 'application/octet-stream' },
+                    }
+                  )
+                );
+                break;
+              default:
+                throw new Error('Too many calls');
+            }
+          });
+        })
+      );
+
+      await downloadRelease('4.2.4', resolve(__dirname, 'tmp', 'test-release-binary'));
+      expect(fetchSpy).toHaveBeenNthCalledWith(1, expect.stringContaining(`${MEDPLUM_RELEASES_URL}/v4.2.4.json`));
+      expect(fetchSpy).toHaveBeenLastCalledWith(`https://example.com/${_platform}`);
+      expect(readFileSync(resolve(__dirname, 'tmp', 'test-release-binary'), { encoding: 'utf-8' })).toStrictEqual(
+        'Hello, Medplum!'
+      );
+
+      fetchSpy.mockRestore();
+    });
+
+    test('Cleans up file when stream errors', async () => {
+      const manifest = buildManifest('4.2.4');
+
+      let count = 0;
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+        vi.fn(async (): Promise<Response> => {
+          return new Promise<Response>((resolve) => {
+            switch (count) {
+              case 0:
+                count++;
+                resolve(
+                  new Response(JSON.stringify(manifest), {
+                    headers: { 'content-type': 'application/json' },
+                    status: 200,
+                  })
+                );
+                break;
+              case 1:
+                count++;
+                resolve(
+                  new Response(
+                    new ReadableStream({
+                      start(controller) {
+                        const textEncoder = new TextEncoder();
+                        controller.enqueue(textEncoder.encode('Hello'));
+                        controller.error(new Error('Simulated stream failure'));
+                      },
+                    }),
+                    {
+                      status: 200,
+                      headers: { 'content-type': 'application/octet-stream' },
+                    }
+                  )
+                );
+                break;
+              default:
+                throw new Error('Too many calls');
+            }
+          });
+        })
+      );
+
+      const downloadPath = resolve(__dirname, 'tmp', 'test-release-binary-cleanup');
+
+      await expect(downloadRelease('4.2.4', downloadPath)).rejects.toThrow(
+        `Error while downloading release version 4.2.4 to ${downloadPath}`
+      );
+      expect(existsSync(downloadPath)).toStrictEqual(false);
+
+      fetchSpy.mockRestore();
+    });
+
+    test('Download returns 404', async () => {
+      const manifest = buildManifest('4.2.4');
+
+      let count = 0;
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+        vi.fn(async (): Promise<Response> => {
+          return new Promise<Response>((resolve) => {
+            switch (count) {
+              case 0:
+                count++;
+                resolve(
+                  new Response(JSON.stringify(manifest), {
+                    headers: { 'content-type': 'application/json' },
+                    status: 200,
+                  })
+                );
+                break;
+              case 1:
+                count++;
+                resolve(
+                  new Response(null, {
+                    status: 404,
+                    statusText: 'Not Found',
+                  })
+                );
+                break;
+              default:
+                throw new Error('Too many calls');
+            }
+          });
+        })
+      );
+
+      await expect(downloadRelease('4.2.4', resolve(__dirname, 'tmp', 'test-release-binary'))).rejects.toThrow(
+        'Failed to download installer with status code: 404'
+      );
+
+      fetchSpy.mockRestore();
+    });
+  });
+});

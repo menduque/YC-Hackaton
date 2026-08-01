@@ -1,0 +1,410 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import {
+  Anchor,
+  Box,
+  Button,
+  CloseButton,
+  Flex,
+  Group,
+  Loader,
+  NativeSelect,
+  Paper,
+  Stack,
+  Text,
+  TextInput,
+} from '@mantine/core';
+import { getReferenceString } from '@medplum/core';
+import type {
+  ActivityDefinition,
+  PlanDefinition,
+  PlanDefinitionAction,
+  Questionnaire,
+  Reference,
+} from '@medplum/fhirtypes';
+import { useMedplum, useResource } from '@medplum/react-hooks';
+import cx from 'clsx';
+import type { JSX, MouseEvent, SyntheticEvent } from 'react';
+import { useEffect, useState } from 'react';
+import { Form } from '../Form/Form';
+import { SubmitButton } from '../Form/SubmitButton';
+import { ResourceInput } from '../ResourceInput/ResourceInput';
+import { killEvent } from '../utils/dom';
+import classes from './PlanDefinitionBuilder.module.css';
+
+export interface PlanDefinitionBuilderProps {
+  readonly value: Partial<PlanDefinition> | Reference<PlanDefinition>;
+  readonly onSubmit: (result: PlanDefinition) => void;
+}
+
+export function PlanDefinitionBuilder(props: PlanDefinitionBuilderProps): JSX.Element | null {
+  const medplum = useMedplum();
+  const defaultValue = useResource(props.value);
+  const [schemaLoaded, setSchemaLoaded] = useState(false);
+  const [selectedKey, setSelectedKey] = useState<string>();
+  const [hoverKey, setHoverKey] = useState<string>();
+  const [value, setValue] = useState<PlanDefinition>();
+
+  function handleDocumentMouseOver(): void {
+    setHoverKey(undefined);
+  }
+
+  function handleDocumentClick(): void {
+    setSelectedKey(undefined);
+  }
+
+  useEffect(() => {
+    medplum
+      .requestSchema('PlanDefinition')
+      .then(() => setSchemaLoaded(true))
+      .catch(console.log);
+  }, [medplum]);
+
+  useEffect(() => {
+    setValue(ensurePlanDefinitionKeys(defaultValue ?? { resourceType: 'PlanDefinition', status: 'active' }));
+    document.addEventListener('mouseover', handleDocumentMouseOver);
+    document.addEventListener('click', handleDocumentClick);
+    return () => {
+      document.removeEventListener('mouseover', handleDocumentMouseOver);
+      document.removeEventListener('click', handleDocumentClick);
+    };
+  }, [defaultValue]);
+
+  if (!schemaLoaded || !value) {
+    return null;
+  }
+
+  function changeProperty(property: string, newValue: any): void {
+    setValue((prevValue) => ({ ...prevValue, [property]: newValue }) as PlanDefinition);
+  }
+
+  return (
+    <div>
+      <Form testid="questionnaire-form" onSubmit={() => props.onSubmit(value)}>
+        <TextInput
+          label="Plan Title"
+          py="md"
+          defaultValue={value.title}
+          onChange={(e) => changeProperty('title', e.currentTarget.value)}
+        />
+        <ActionArrayBuilder
+          actions={value.action || []}
+          selectedKey={selectedKey}
+          setSelectedKey={setSelectedKey}
+          hoverKey={hoverKey}
+          setHoverKey={setHoverKey}
+          onChange={(x) => changeProperty('action', x)}
+        />
+        <SubmitButton>Save</SubmitButton>
+      </Form>
+    </div>
+  );
+}
+
+interface ActionArrayBuilderProps {
+  readonly actions: PlanDefinitionAction[];
+  readonly selectedKey: string | undefined;
+  readonly setSelectedKey: (key: string | undefined) => void;
+  readonly hoverKey: string | undefined;
+  readonly setHoverKey: (key: string | undefined) => void;
+  readonly onChange: (actions: PlanDefinitionAction[]) => void;
+}
+
+function ActionArrayBuilder(props: ActionArrayBuilderProps): JSX.Element {
+  function changeAction(changedAction: PlanDefinitionAction): void {
+    props.onChange(props.actions.map((i) => (i.id === changedAction.id ? changedAction : i)));
+  }
+
+  function addAction(addedAction: PlanDefinitionAction): void {
+    props.onChange([...props.actions, addedAction]);
+    props.setSelectedKey(addedAction.id);
+  }
+
+  function removeAction(removedAction: PlanDefinitionAction): void {
+    props.onChange(props.actions.filter((i) => i !== removedAction));
+  }
+
+  return (
+    <Stack gap="md" className={classes.section}>
+      {props.actions.map((action) => (
+        <ActionBuilder
+          key={action.id}
+          action={action}
+          selectedKey={props.selectedKey}
+          setSelectedKey={props.setSelectedKey}
+          hoverKey={props.hoverKey}
+          setHoverKey={props.setHoverKey}
+          onChange={changeAction}
+          onRemove={() => removeAction(action)}
+        />
+      ))}
+      <div>
+        <Button
+          variant="outline"
+          onClick={(e: MouseEvent) => {
+            killEvent(e);
+            addAction({ id: generateId() });
+          }}
+        >
+          Add action
+        </Button>
+      </div>
+    </Stack>
+  );
+}
+
+interface ActionBuilderProps {
+  readonly action: PlanDefinitionAction;
+  readonly selectedKey: string | undefined;
+  readonly setSelectedKey: (key: string | undefined) => void;
+  readonly hoverKey: string | undefined;
+  readonly setHoverKey: (key: string | undefined) => void;
+  readonly onChange: (action: PlanDefinitionAction) => void;
+  readonly onRemove: () => void;
+}
+
+function ActionBuilder(props: ActionBuilderProps): JSX.Element {
+  const { action } = props;
+
+  function onClick(e: SyntheticEvent): void {
+    e.stopPropagation();
+    props.setSelectedKey(props.action.id);
+  }
+
+  function onHover(e: SyntheticEvent): void {
+    killEvent(e);
+    props.setHoverKey(props.action.id);
+  }
+
+  return (
+    <div onClick={onClick} onMouseOver={onHover} onFocus={onHover}>
+      <ActionEditor
+        action={action}
+        onChange={props.onChange}
+        selectedKey={props.selectedKey}
+        hoverKey={props.hoverKey}
+        onRemove={props.onRemove}
+      />
+    </div>
+  );
+}
+
+interface ActionEditorProps {
+  readonly action: PlanDefinitionAction;
+  readonly selectedKey: string | undefined;
+  readonly hoverKey: string | undefined;
+  readonly onChange: (action: PlanDefinitionAction) => void;
+  readonly onRemove: () => void;
+}
+
+function ActionEditor(props: ActionEditorProps): JSX.Element {
+  const { action } = props;
+  const [actionType, setActionType] = useState<string | undefined>();
+  const medplum = useMedplum();
+  const [loading, setLoading] = useState(false);
+  const [resource, setResource] = useState<Questionnaire | ActivityDefinition | undefined>();
+  const editing = props.selectedKey === props.action.id;
+  const hovering = props.hoverKey === props.action.id;
+
+  function changeProperty(property: string, value: any): void {
+    props.onChange({
+      ...action,
+      [property]: value,
+    });
+  }
+
+  const className = cx(classes.section, {
+    [classes.hovering]: hovering && !editing,
+  });
+
+  useEffect(() => {
+    const readResource = async (): Promise<void> => {
+      if (!action.definitionCanonical) {
+        return;
+      }
+      setLoading(true);
+      const resource = await medplum.readCanonical(['Questionnaire', 'ActivityDefinition'], action.definitionCanonical);
+      setActionType(getInitialActionType(resource));
+      setResource(resource);
+      setLoading(false);
+    };
+    readResource().catch(console.error);
+  }, [action.definitionCanonical, medplum]);
+
+  if (loading) {
+    return <Loader />;
+  }
+
+  return (
+    <Paper data-testid={action.id} className={className} p={0} radius="sm" withBorder>
+      <Flex w="100%" p="xs" bg="gray.0" gap="md" align="center" justify="space-between">
+        <TextInput
+          w="100%"
+          name={`actionTitle-${action.id}`}
+          defaultValue={action.title}
+          placeholder="Title"
+          onChange={(e) => changeProperty('title', e.currentTarget.value)}
+        />
+        <CloseButton data-testid="close-button" onClick={props.onRemove} />
+      </Flex>
+
+      {editing && (
+        <Stack gap="xl" p="md">
+          <Box>
+            <TextInput
+              label="Task Description"
+              placeholder="Enter task description"
+              name={`actionDescription-${action.id}`}
+              defaultValue={action.description}
+              onChange={(e) => changeProperty('description', e.currentTarget.value)}
+            />
+          </Box>
+
+          <Box>
+            <NativeSelect
+              label="Type of Action"
+              value={actionType}
+              onChange={(e) => {
+                const value = e.currentTarget.value === 'standard' ? undefined : e.currentTarget.value;
+                setActionType(value);
+                props.onChange({
+                  ...props.action,
+                  definitionCanonical: value === 'standard' ? undefined : props.action.definitionCanonical,
+                });
+              }}
+              data={[
+                { value: 'standard', label: 'Standard task' },
+                { value: 'questionnaire', label: 'Task with Questionnaire' },
+                { value: 'activitydefinition', label: 'Task with Activity Definition' },
+              ]}
+            />
+          </Box>
+
+          {actionType === 'questionnaire' && (
+            <Stack gap={0}>
+              <Group gap={0} mb="xs">
+                <Text fw={600}>Select questionnaire</Text>
+                <Text c="red">*</Text>
+              </Group>
+              <Text size="sm" c="dimmed" mb="sm">
+                Questionnaire to be shown in the task in Encounter view. You can create new one from{' '}
+                <Anchor href="/Questionnaire" target="_blank" c="blue">
+                  questionnaires list
+                </Anchor>
+              </Text>
+              <ActionResourceTypeBuilder
+                resource={resource}
+                resourceType="Questionnaire"
+                action={action}
+                onChange={props.onChange}
+                placeholder="Search for questionnaire"
+              />
+            </Stack>
+          )}
+
+          {actionType === 'activitydefinition' && (
+            <Stack gap={0}>
+              <Group gap={0} mb="xs">
+                <Text fw={600}>Select activity definition</Text>
+                <Text c="red">*</Text>
+              </Group>
+              <Text size="sm" c="dimmed" mb="sm">
+                ActivityDefinition.kind resource to be shown in the task in Encounter view. You can create new one from{' '}
+                <Anchor href="/ActivityDefinition" target="_blank" c="blue">
+                  activity definitions list
+                </Anchor>
+              </Text>
+              <ActionResourceTypeBuilder
+                resource={resource}
+                resourceType="ActivityDefinition"
+                action={action}
+                onChange={props.onChange}
+                placeholder="Search for activity definition"
+              />
+            </Stack>
+          )}
+        </Stack>
+      )}
+    </Paper>
+  );
+}
+
+interface ActionResourceTypeBuilderProps {
+  readonly action: PlanDefinitionAction;
+  readonly resource: Questionnaire | ActivityDefinition | undefined;
+  readonly resourceType: 'Questionnaire' | 'ActivityDefinition';
+  readonly placeholder?: string;
+  readonly onChange: (action: PlanDefinitionAction) => void;
+}
+
+function ActionResourceTypeBuilder(props: ActionResourceTypeBuilderProps): JSX.Element {
+  const { id } = props.action;
+  const { resource } = props as { resource: Questionnaire | ActivityDefinition };
+
+  return (
+    <ResourceInput
+      name={id as string}
+      placeholder={props.placeholder}
+      resourceType={props.resourceType}
+      defaultValue={resource}
+      onChange={(newValue) => {
+        if (newValue) {
+          props.onChange({
+            ...props.action,
+            definitionCanonical: 'url' in newValue ? newValue.url : undefined,
+            definitionUri: !('url' in newValue) ? getReferenceString(newValue) : undefined,
+          });
+        } else {
+          props.onChange({ ...props.action, definitionCanonical: undefined });
+        }
+      }}
+    />
+  );
+}
+
+function getInitialActionType(resource: Questionnaire | ActivityDefinition | undefined): string | undefined {
+  return resource === undefined ? 'standard' : resource.resourceType.toLowerCase();
+}
+
+let nextId = 1;
+
+/**
+ * Generates a unique ID.
+ * React needs unique IDs for components for rendering performance.
+ * All of the important components in the questionnaire builder have id properties for this:
+ * Questionnaire, QuestionnaireItem, and QuestionnaireItemAnswerOption.
+ * @param existing - Optional existing id which will update nextId.
+ * @returns A unique key.
+ */
+function generateId(existing?: string): string {
+  if (existing) {
+    if (existing.startsWith('id-')) {
+      const existingNum = Number.parseInt(existing.substring(3), 10);
+      if (!Number.isNaN(existingNum)) {
+        nextId = Math.max(nextId, existingNum + 1);
+      }
+    }
+    return existing;
+  }
+  return 'id-' + nextId++;
+}
+
+function ensurePlanDefinitionKeys(planDefinition: PlanDefinition): PlanDefinition {
+  return {
+    ...planDefinition,
+    action: ensurePlanDefinitionActionKeys(planDefinition.action),
+  };
+}
+
+function ensurePlanDefinitionActionKeys(
+  actions: PlanDefinitionAction[] | undefined
+): PlanDefinitionAction[] | undefined {
+  if (!actions) {
+    return undefined;
+  }
+  return actions.map((action) => ({
+    ...action,
+    id: generateId(action.id),
+    action: ensurePlanDefinitionActionKeys(action.action),
+  }));
+}

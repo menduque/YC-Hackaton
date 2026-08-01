@@ -1,0 +1,773 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import { MantineProvider } from '@mantine/core';
+import { Notifications, notifications } from '@mantine/notifications';
+import { allOk, forbidden } from '@medplum/core';
+import type { Parameters } from '@medplum/fhirtypes';
+import { MockClient } from '@medplum/mock';
+import { MedplumProvider } from '@medplum/react';
+import { getDefaultNormalizer } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+import type { MockInstance } from 'vitest';
+import { AppRoutes } from '../AppRoutes';
+import { act, fireEvent, render, screen } from '../test-utils/render';
+
+describe('SuperAdminPage', () => {
+  let postSpy: MockInstance;
+  let medplum: MockClient;
+
+  function setup(): void {
+    render(
+      <MedplumProvider medplum={medplum}>
+        <MemoryRouter initialEntries={['/admin/super']} initialIndex={0}>
+          <MantineProvider env="test">
+            <Notifications />
+            <AppRoutes />
+          </MantineProvider>
+        </MemoryRouter>
+      </MedplumProvider>
+    );
+  }
+
+  beforeEach(() => {
+    medplum = new MockClient();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(medplum, 'isSuperAdmin').mockImplementation(() => true);
+    postSpy = vi.spyOn(medplum, 'post');
+  });
+
+  afterEach(async () => {
+    await act(async () => notifications.clean());
+    vi.clearAllMocks();
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    vi.useRealTimers();
+  });
+
+  test('Rebuild StructureDefinitions', async () => {
+    setup();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Rebuild StructureDefinitions'));
+    });
+
+    expect(screen.getByText('Done')).toBeInTheDocument();
+  });
+
+  test('Rebuild SearchParameters', async () => {
+    setup();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Rebuild SearchParameters'));
+    });
+
+    expect(screen.getByText('Done')).toBeInTheDocument();
+  });
+
+  test('Rebuild ValueSets', async () => {
+    setup();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Rebuild ValueSets'));
+    });
+
+    expect(screen.getByText('Done')).toBeInTheDocument();
+  });
+
+  test('Reindex resource type', async () => {
+    setup();
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('Reindex Resource Type'), { target: { value: 'Patient' } });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Reindex'));
+    });
+
+    expect(screen.getByText('Done')).toBeInTheDocument();
+  });
+
+  test('Reindex form show/hide advanced options', async () => {
+    setup();
+
+    expect(screen.queryByLabelText('Resources per batch')).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Show Advanced Options'));
+    });
+
+    expect(screen.getByLabelText('Resources per batch')).toBeInTheDocument();
+    expect(screen.getByLabelText('Search query timeout (ms)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Upsert query timeout (ms)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Delay between batches (ms)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Log progress every N resources')).toBeInTheDocument();
+    expect(screen.getByLabelText('End timestamp buffer (minutes)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Max iteration attempts')).toBeInTheDocument();
+
+    expect(screen.getByText('Hide Advanced Options')).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Hide Advanced Options'));
+    });
+
+    expect(screen.queryByLabelText('Resources per batch')).not.toBeInTheDocument();
+  });
+
+  test('Purge resources', async () => {
+    setup();
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Purge Resource Type'), { target: { value: 'AuditEvent' } });
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Purge Before'), { target: { value: '2000-01-01T00:00:00Z' } });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Purge'));
+    });
+
+    expect(screen.getByText('Done')).toBeInTheDocument();
+  });
+
+  test('Remove Bot ID Jobs from Queue', async () => {
+    setup();
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText('Bot Id'), { target: { value: 'BotId' } });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Jobs by Bot ID' }));
+    });
+
+    expect(screen.getByText('Done')).toBeInTheDocument();
+  });
+
+  test('Force set password', async () => {
+    setup();
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Email *'), { target: { value: 'alice@example.com' } });
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Password *'), { target: { value: 'override123' } });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Force Set Password' }));
+    });
+
+    expect(screen.getByText('Done')).toBeInTheDocument();
+  });
+
+  test('Invalid indexes', async () => {
+    setup();
+
+    const expectString = 'Some__column_idx:\n  [is_valid: false]';
+    medplum.router.add('POST', '$db-invalid-indexes', async () => {
+      return [
+        allOk,
+        {
+          resourceType: 'Parameters',
+          parameter: [{ name: 'invalidIndex', valueString: expectString }],
+        },
+      ];
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Get Database Invalid Indexes' }));
+    });
+
+    expect(
+      await screen.findByText(expectString, {
+        normalizer: getDefaultNormalizer({ collapseWhitespace: false }),
+      })
+    ).toBeInTheDocument();
+  });
+
+  test('Database Stats', async () => {
+    setup();
+
+    medplum.router.add('POST', '$db-stats', async () => {
+      return [
+        allOk,
+        { resourceType: 'Parameters', parameter: [{ name: 'tableString', valueString: 'table1: 100\n' }] },
+      ];
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Get Database Stats' }));
+    });
+
+    expect(await screen.findByText('table1: 100')).toBeInTheDocument();
+  });
+
+  test('Database Stats - Specified table names', async () => {
+    setup();
+
+    medplum.router.add('POST', '$db-stats', async () => {
+      return [
+        allOk,
+        { resourceType: 'Parameters', parameter: [{ name: 'tableString', valueString: 'table1: 100\n' }] },
+      ];
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Table Names (comma-delimited)'), { target: { value: 'Observation' } });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Get Database Stats' }));
+    });
+
+    expect(await screen.findByText('table1: 100')).toBeInTheDocument();
+
+    expect(postSpy).toHaveBeenCalledWith(
+      'fhir/R4/$db-stats',
+      expect.objectContaining({
+        resourceType: 'Parameters',
+        parameter: [{ name: 'tableNames', valueString: 'Observation' }],
+      } satisfies Parameters)
+    );
+  });
+
+  test('Get Database Schema Drift', async () => {
+    setup();
+
+    const returnValue = 'This is a fake return value';
+    medplum.router.add('POST', '$db-schema-diff', async () => {
+      return [
+        allOk,
+        {
+          resourceType: 'Parameters',
+          parameter: [{ name: 'migrationString', valueString: returnValue }],
+        },
+      ];
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Get Schema Drift' }));
+    });
+
+    expect(await screen.findByText(returnValue)).toBeInTheDocument();
+  });
+
+  test('Reconcile Database Schema Drift - Success', async () => {
+    setup();
+    const startAsyncRequestSpy = vi.spyOn(medplum, 'startAsyncRequest').mockResolvedValueOnce({
+      resourceType: 'AsyncJob',
+      id: '123',
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reconcile Schema Drift' }));
+    });
+
+    expect(screen.getByText('View AsyncJob')).toBeInTheDocument();
+    expect(startAsyncRequestSpy).toHaveBeenCalledTimes(1);
+    startAsyncRequestSpy.mockRestore();
+  });
+
+  test('Reconcile Database Schema Drift - Forbidden', async () => {
+    setup();
+    const startAsyncRequestSpy = vi.spyOn(medplum, 'startAsyncRequest').mockResolvedValueOnce(forbidden);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reconcile Schema Drift' }));
+    });
+
+    expect(screen.getByText('Forbidden')).toBeInTheDocument();
+    expect(startAsyncRequestSpy).toHaveBeenCalledTimes(1);
+    startAsyncRequestSpy.mockRestore();
+  });
+
+  test('Reload cron resources', async () => {
+    setup();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reload Cron Resources' }));
+    });
+
+    expect(screen.getByText('Done')).toBeInTheDocument();
+  });
+
+  test('Access denied', async () => {
+    vi.spyOn(medplum, 'isSuperAdmin').mockImplementationOnce(() => false);
+    setup();
+    expect(screen.getByText('Forbidden')).toBeInTheDocument();
+  });
+
+  describe('Clear All WebSocket Subscriptions', () => {
+    test('Clears all projects when no project selected', async () => {
+      medplum.router.add('POST', '$clear-all-ws-subs', async () => {
+        return [
+          allOk,
+          {
+            resourceType: 'Parameters',
+            parameter: [
+              {
+                name: 'pubSubKeysDeleted',
+                valueInteger: 1,
+              },
+              {
+                name: 'cacheKeysDeleted',
+                valueInteger: 1,
+              },
+            ],
+          },
+        ];
+      });
+      setup();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Clear All WebSocket Subscriptions' }));
+      });
+
+      expect(screen.getByText(/Are you sure you want to completely clear/)).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+      });
+
+      expect(postSpy).toHaveBeenCalledWith('fhir/R4/$clear-all-ws-subs', undefined);
+      expect(await screen.findByText('Done')).toBeInTheDocument();
+    });
+
+    test('Clears specific project when a project is selected', async () => {
+      const projectId = '11111111-1111-1111-1111-111111111111';
+      medplum.router.add('GET', 'Project', async () => {
+        return [
+          allOk,
+          {
+            resourceType: 'Bundle',
+            type: 'searchset',
+            entry: [{ resource: { resourceType: 'Project', id: projectId, name: 'Test Project' } }],
+          } as any,
+        ];
+      });
+      medplum.router.add('POST', '$clear-all-ws-subs', async () => {
+        return [
+          allOk,
+          {
+            resourceType: 'Parameters',
+            parameter: [
+              {
+                name: 'pubSubKeysDeleted',
+                valueInteger: 1,
+              },
+              {
+                name: 'cacheKeysDeleted',
+                valueInteger: 1,
+              },
+            ],
+          },
+        ];
+      });
+      setup();
+
+      // Select a project via the ReferenceInput
+      const input = screen.getByPlaceholderText('All projects');
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'Test' } });
+      });
+      // Advance the debounce timer so the dropdown populates
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'ArrowDown', code: 'ArrowDown' });
+      });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Clear All WebSocket Subscriptions' }));
+      });
+
+      expect(screen.getByText(/Are you sure you want to completely clear/)).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+      });
+
+      expect(postSpy).toHaveBeenCalledWith('fhir/R4/$clear-all-ws-subs', {
+        resourceType: 'Parameters',
+        parameter: [{ name: 'projectId', valueString: projectId }],
+      });
+    });
+  });
+
+  describe('ExplainSearchForm', () => {
+    test('Explain search with valid data', async () => {
+      setup();
+
+      medplum.router.add('GET', 'fhir/R4/ProjectMembership', async () => {
+        return [allOk, { resourceType: 'Bundle', type: 'searchset', entry: [] } as any];
+      });
+
+      medplum.router.add('POST', '$explain', async () => {
+        return [
+          allOk,
+          {
+            resourceType: 'Parameters',
+            parameter: [
+              { name: 'query', valueString: 'SELECT * FROM observation' },
+              { name: 'parameters', valueString: '[]' },
+              { name: 'explain', valueString: 'Seq Scan on observation' },
+            ],
+          },
+        ];
+      });
+
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('Search *'), {
+          target: { value: 'Observation?code=85354-9&_sort=-date&_count=5' },
+        });
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Explain Search' }));
+      });
+
+      expect(await screen.findByText('Database Explain')).toBeInTheDocument();
+    });
+
+    test('Explain search with analyze checkbox', async () => {
+      setup();
+
+      medplum.router.add('POST', '$explain', async () => {
+        return [
+          allOk,
+          {
+            resourceType: 'Parameters',
+            parameter: [
+              { name: 'query', valueString: 'SELECT * FROM observation' },
+              { name: 'parameters', valueString: '[]' },
+              { name: 'explain', valueString: 'Seq Scan on observation' },
+            ],
+          },
+        ];
+      });
+
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('Search *'), {
+          target: { value: 'Observation?code=85354-9' },
+        });
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText('Analyze'));
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Explain Search' }));
+      });
+
+      expect(postSpy).toHaveBeenCalledWith(
+        'fhir/R4/$explain',
+        expect.objectContaining({
+          analyze: true,
+          query: 'Observation?code=85354-9',
+          format: 'text',
+        }),
+        undefined,
+        expect.any(Object)
+      );
+    });
+
+    test('Explain search with total count checkbox', async () => {
+      setup();
+
+      medplum.router.add('POST', '$explain', async () => {
+        return [
+          allOk,
+          {
+            resourceType: 'Parameters',
+            parameter: [
+              { name: 'query', valueString: 'SELECT * FROM observation' },
+              { name: 'parameters', valueString: '[]' },
+              { name: 'explain', valueString: 'Seq Scan on observation' },
+              { name: 'countEstimate', valueInteger: 12345 },
+              { name: 'countAccurate', valueInteger: 12300 },
+            ],
+          },
+        ];
+      });
+
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('Search *'), {
+          target: { value: 'Observation?code=85354-9' },
+        });
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText('Total count'));
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Explain Search' }));
+      });
+
+      expect(postSpy).toHaveBeenCalledWith(
+        'fhir/R4/$explain',
+        expect.objectContaining({
+          count: true,
+          query: 'Observation?code=85354-9',
+          format: 'text',
+        }),
+        undefined,
+        expect.any(Object)
+      );
+
+      expect(await screen.findByText('Counts')).toBeInTheDocument();
+      expect(await screen.findByText('Estimate: 12,345')).toBeInTheDocument();
+      expect(await screen.findByText('Accurate: 12,300')).toBeInTheDocument();
+    });
+
+    test('Explain search validation - missing query', async () => {
+      setup();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Explain Search' }));
+      });
+
+      expect(postSpy).not.toHaveBeenCalled();
+    });
+
+    test('Explain search with direct ProjectMembership entry', async () => {
+      setup();
+
+      medplum.router.add('GET', 'ProjectMembership', async () => {
+        return [
+          allOk,
+          {
+            resourceType: 'Bundle',
+            type: 'searchset',
+            entry: [{ resource: { resourceType: 'ProjectMembership', id: 'membership-1' } }],
+          } as any,
+        ];
+      });
+
+      medplum.router.add('POST', '$explain', async () => {
+        return [
+          allOk,
+          {
+            resourceType: 'Parameters',
+            parameter: [
+              { name: 'query', valueString: 'SELECT * FROM observation' },
+              { name: 'parameters', valueString: '[]' },
+              { name: 'explain', valueString: 'Seq Scan on observation' },
+            ],
+          },
+        ];
+      });
+
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('Search *'), {
+          target: { value: 'Observation?code=85354-9' },
+        });
+      });
+
+      const input = screen.getByPlaceholderText('ProjectMembership');
+
+      await act(async () => {
+        fireEvent.change(input, {
+          target: { value: 'anything' },
+        });
+      });
+
+      // Wait for the drop down
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+
+      // Press the down arrow
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'ArrowDown', code: 'ArrowDown' });
+      });
+
+      // Press "Enter"
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Explain Search' }));
+      });
+
+      expect(postSpy).toHaveBeenCalledWith(
+        'fhir/R4/$explain',
+        expect.objectContaining({
+          query: 'Observation?code=85354-9',
+          analyze: false,
+          format: 'text',
+        }),
+        undefined,
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'x-medplum-on-behalf-of': 'ProjectMembership/membership-1',
+          }),
+        })
+      );
+    });
+
+    test('Explain search via project and practitioner', async () => {
+      setup();
+
+      medplum.router.add('GET', 'Project', async () => {
+        return [
+          allOk,
+          {
+            resourceType: 'Bundle',
+            type: 'searchset',
+            entry: [
+              { resource: { resourceType: 'Project', id: 'project-1' } },
+              { resource: { resourceType: 'Project', id: 'project-2' } },
+            ],
+          } as any,
+        ];
+      });
+      medplum.router.add('GET', 'Practitioner', async () => {
+        return [
+          allOk,
+          {
+            resourceType: 'Bundle',
+            type: 'searchset',
+            entry: [
+              { resource: { resourceType: 'Practitioner', id: 'practitioner-1' } },
+              { resource: { resourceType: 'Practitioner', id: 'practitioner-2' } },
+            ],
+          } as any,
+        ];
+      });
+      medplum.router.add('GET', 'ProjectMembership', async () => {
+        return [
+          allOk,
+          {
+            resourceType: 'Bundle',
+            type: 'searchset',
+            entry: [{ resource: { resourceType: 'ProjectMembership', id: 'membership-1' } }],
+          } as any,
+        ];
+      });
+
+      medplum.router.add('POST', '$explain', async () => {
+        return [
+          allOk,
+          {
+            resourceType: 'Parameters',
+            parameter: [
+              { name: 'query', valueString: 'SELECT * FROM observation' },
+              { name: 'parameters', valueString: '[]' },
+              { name: 'explain', valueString: 'Seq Scan on observation' },
+            ],
+          },
+        ];
+      });
+
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('Search *'), {
+          target: { value: 'Observation?code=85354-9' },
+        });
+      });
+
+      const projectInput = screen.getByPlaceholderText('Project');
+      const practitionerInput = screen.getByPlaceholderText('Practitioner or Patient');
+      const projectMembershipInput = screen.getByPlaceholderText('ProjectMembership');
+
+      // project input
+      await act(async () => {
+        fireEvent.change(projectInput, {
+          target: { value: 'anything' },
+        });
+      });
+
+      // Wait for the drop down
+      await act(async () => vi.advanceTimersByTimeAsync(1000));
+
+      // Press the down arrow
+      await act(async () => {
+        fireEvent.keyDown(projectMembershipInput, { key: 'ArrowDown', code: 'ArrowDown' });
+      });
+
+      // Press "Enter"
+      await act(async () => {
+        fireEvent.keyDown(projectMembershipInput, { key: 'Enter', code: 'Enter' });
+      });
+
+      // practitioner input
+      await act(async () => {
+        fireEvent.change(practitionerInput, {
+          target: { value: 'anything' },
+        });
+      });
+
+      // Wait for the drop down
+      await act(async () => vi.advanceTimersByTimeAsync(1000));
+
+      // Press the down arrow
+      await act(async () => {
+        fireEvent.keyDown(practitionerInput, { key: 'ArrowDown', code: 'ArrowDown' });
+      });
+
+      // Press "Enter"
+      await act(async () => {
+        fireEvent.keyDown(practitionerInput, { key: 'Enter', code: 'Enter' });
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Explain Search' }));
+      });
+
+      expect(postSpy).toHaveBeenCalledWith(
+        'fhir/R4/$explain',
+        expect.objectContaining({
+          query: 'Observation?code=85354-9',
+          analyze: false,
+          format: 'text',
+        }),
+        undefined,
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'x-medplum-on-behalf-of': 'ProjectMembership/membership-1',
+          }),
+        })
+      );
+    });
+
+    test('Explain search error handling', async () => {
+      setup();
+
+      medplum.router.add('POST', '$explain', async () => {
+        return [forbidden];
+      });
+
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('Search *'), {
+          target: { value: 'Observation?code=85354-9' },
+        });
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Explain Search' }));
+      });
+
+      expect(await screen.findByText('Forbidden')).toBeInTheDocument();
+    });
+
+    test('ExplainSearchForm access denied for non-super admin', async () => {
+      vi.spyOn(medplum, 'isSuperAdmin').mockImplementationOnce(() => false);
+      setup();
+
+      // The ExplainSearchForm should show forbidden when user is not super admin
+      const explainSections = screen.getAllByText('Forbidden');
+      expect(explainSections.length).toBeGreaterThan(0);
+    });
+  });
+});

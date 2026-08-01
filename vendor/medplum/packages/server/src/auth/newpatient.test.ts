@@ -1,0 +1,225 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import { createReference, Operator, resolveId } from '@medplum/core';
+import type { Patient } from '@medplum/fhirtypes';
+import { randomUUID } from 'crypto';
+import express from 'express';
+import request from 'supertest';
+import { vi } from 'vitest';
+import { initApp, shutdownApp } from '../app';
+import { loadTestConfig } from '../config/loader';
+import { getGlobalSystemRepo } from '../fhir/repo';
+import { setupRecaptchaMock, withTestContext } from '../test.setup';
+
+const fetchMock = vi.spyOn(globalThis, 'fetch');
+const app = express();
+
+describe('New patient', () => {
+  beforeAll(async () => {
+    const config = await loadTestConfig();
+    await initApp(app, config);
+  });
+
+  afterAll(async () => {
+    await shutdownApp();
+  });
+
+  beforeEach(async () => {
+    fetchMock.mockClear();
+    setupRecaptchaMock(true);
+  });
+
+  test('Patient registration', async () => {
+    const systemRepo = getGlobalSystemRepo();
+
+    // Register as Christina
+    const res1 = await request(app)
+      .post('/auth/newuser')
+      .type('json')
+      .send({
+        firstName: 'Christina',
+        lastName: 'Smith',
+        email: `christina${randomUUID()}@example.com`,
+        password: 'password!@#',
+        recaptchaToken: 'xyz',
+        codeChallenge: 'xyz',
+        codeChallengeMethod: 'plain',
+      });
+    expect(res1).toHaveStatus(200);
+
+    const res2 = await request(app).post('/auth/newproject').type('json').send({
+      login: res1.body.login,
+      projectName: 'Christina Project',
+    });
+    expect(res2).toHaveStatus(200);
+
+    const res3 = await request(app).post('/oauth2/token').type('form').send({
+      grant_type: 'authorization_code',
+      code: res2.body.code,
+      code_verifier: 'xyz',
+    });
+    expect(res3).toHaveStatus(200);
+
+    const projectId = resolveId(res3.body.project) as string;
+
+    // Register as a patient in the new project
+    // Projects now have a default patient access policy, so this should succeed
+    const res4 = await request(app)
+      .post('/auth/newuser')
+      .type('json')
+      .send({
+        projectId,
+        firstName: 'Peggy',
+        lastName: 'Patient',
+        email: `peggy${randomUUID()}@example.com`,
+        password: 'password!@#',
+        recaptchaToken: 'xyz',
+        codeChallenge: 'xyz',
+        codeChallengeMethod: 'plain',
+      });
+    expect(res4).toHaveStatus(200);
+
+    const res5 = await request(app).post('/auth/newpatient').type('json').send({
+      login: res4.body.login,
+      projectId: projectId,
+    });
+    expect(res5).toHaveStatus(200);
+    expect(res5.body.code).toBeDefined();
+
+    // Try to reuse the login
+    // (This should fail)
+    const res6 = await request(app).post('/auth/newpatient').type('json').send({
+      login: res4.body.login,
+      projectId,
+    });
+    expect(res6).toHaveStatus(400);
+
+    // Try to register as a patient without a login
+    // (This should fail)
+    const res7 = await request(app).post('/auth/newpatient').type('json').send({
+      projectId,
+    });
+    expect(res7).toHaveStatus(400);
+
+    // Get the Patient
+    const res8 = await request(app)
+      .get(`/fhir/R4/Patient`)
+      .set('Authorization', 'Bearer ' + res3.body.access_token);
+    expect(res8).toHaveStatus(200);
+
+    const patient = res8.body.entry[0].resource as Patient;
+
+    // Get the ProjectMembership
+    const membershipBundle = await systemRepo.search({
+      resourceType: 'ProjectMembership',
+      filters: [{ code: 'profile', operator: Operator.EQUALS, value: 'Patient/' + patient.id }],
+    });
+    expect(membershipBundle).toBeDefined();
+    expect(membershipBundle.entry).toBeDefined();
+    expect(membershipBundle.entry).toHaveLength(1);
+
+    // Create an observation for the new patient
+    const res9 = await request(app)
+      .post(`/fhir/R4/Observation`)
+      .set('Authorization', 'Bearer ' + res3.body.access_token)
+      .type('json')
+      .send({
+        resourceType: 'Observation',
+        status: 'final',
+        code: { text: 'test' },
+        subject: createReference(patient),
+      });
+    expect(res9).toHaveStatus(201);
+
+    // Create an observation for a different patient
+    const res10 = await request(app)
+      .post(`/fhir/R4/Observation`)
+      .set('Authorization', 'Bearer ' + res3.body.access_token)
+      .type('json')
+      .send({
+        resourceType: 'Observation',
+        status: 'final',
+        code: { text: 'test' },
+        subject: { reference: randomUUID() },
+      });
+    expect(res10).toHaveStatus(201);
+
+    // Login as the patient
+    const res11 = await request(app).post('/oauth2/token').type('form').send({
+      grant_type: 'authorization_code',
+      code: res5.body.code,
+      code_verifier: 'xyz',
+    });
+    expect(res11).toHaveStatus(200);
+
+    // Make sure that the patient can only access their observations
+    const res12 = await request(app)
+      .get(`/fhir/R4/Observation`)
+      .set('Authorization', 'Bearer ' + res11.body.access_token);
+    expect(res12).toHaveStatus(200);
+    expect(res12.body.entry).toHaveLength(1);
+    expect(res12.body.entry[0].resource.id).toStrictEqual(res9.body.id);
+  });
+
+  test('Fails when defaultPatientAccessPolicy is removed', async () => {
+    const systemRepo = getGlobalSystemRepo();
+
+    // Register as Christina
+    const res1 = await request(app)
+      .post('/auth/newuser')
+      .type('json')
+      .send({
+        firstName: 'Christina',
+        lastName: 'Smith',
+        email: `christina${randomUUID()}@example.com`,
+        password: 'password!@#',
+        recaptchaToken: 'xyz',
+        codeChallenge: 'xyz',
+        codeChallengeMethod: 'plain',
+      });
+    expect(res1).toHaveStatus(200);
+
+    const res2 = await request(app).post('/auth/newproject').type('json').send({
+      login: res1.body.login,
+      projectName: 'Christina Project',
+    });
+    expect(res2).toHaveStatus(200);
+
+    const res3 = await request(app).post('/oauth2/token').type('form').send({
+      grant_type: 'authorization_code',
+      code: res2.body.code,
+      code_verifier: 'xyz',
+    });
+    expect(res3).toHaveStatus(200);
+
+    const projectId = resolveId(res3.body.project) as string;
+
+    // Remove the default patient access policy from the project
+    await withTestContext(() =>
+      systemRepo.patchResource('Project', projectId, [{ op: 'remove', path: '/defaultPatientAccessPolicy' }])
+    );
+
+    // Register a new user in the project
+    const res4 = await request(app)
+      .post('/auth/newuser')
+      .type('json')
+      .send({
+        projectId,
+        firstName: 'Peggy',
+        lastName: 'Patient',
+        email: `peggy${randomUUID()}@example.com`,
+        password: 'password!@#',
+        recaptchaToken: 'xyz',
+        codeChallenge: 'xyz',
+        codeChallengeMethod: 'plain',
+      });
+    expect(res4).toHaveStatus(200);
+
+    // Patient registration should fail without a default policy
+    const res5 = await request(app).post('/auth/newpatient').type('json').send({
+      login: res4.body.login,
+      projectId,
+    });
+    expect(res5).toHaveStatus(400);
+  });
+});

@@ -1,0 +1,67 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { CodeableConcept, ValueSetExpansionContains } from '@medplum/fhirtypes';
+import type { JSX } from 'react';
+import { useState } from 'react';
+import type { ComplexTypeInputProps } from '../ResourcePropertyInput/ResourcePropertyInput.utils';
+import type { ValueSetAutocompleteProps } from '../ValueSetAutocomplete/ValueSetAutocomplete';
+import { ValueSetAutocomplete } from '../ValueSetAutocomplete/ValueSetAutocomplete';
+
+export interface CodeableConceptInputProps
+  extends
+    Omit<ValueSetAutocompleteProps, 'name' | 'defaultValue' | 'onChange' | 'disabled'>,
+    ComplexTypeInputProps<CodeableConcept> {
+  readonly onChange?: (value: CodeableConcept | undefined) => void;
+}
+
+export function CodeableConceptInput(props: CodeableConceptInputProps): JSX.Element {
+  const {
+    defaultValue,
+    onChange,
+    withHelpText,
+    // spread these unused props so they don't get passed to ValueSetAutocomplete in `rest`
+    outcome: _outcome,
+    path: _path,
+    valuePath: _valuePath,
+    ...rest
+  } = props;
+  const [value, setValue] = useState(defaultValue);
+
+  function handleChange(newValues: ValueSetExpansionContains[]): void {
+    const newConcept = valueSetElementToCodeableConcept(newValues);
+    setValue(newConcept);
+    if (onChange) {
+      onChange(newConcept);
+    }
+  }
+
+  return (
+    <ValueSetAutocomplete
+      defaultValue={value && codeableConceptToValueSetElement(value)}
+      onChange={handleChange}
+      withHelpText={withHelpText ?? true}
+      {...rest}
+    />
+  );
+}
+
+function codeableConceptToValueSetElement(concept: CodeableConcept): ValueSetExpansionContains[] | undefined {
+  return concept.coding?.map((c) => ({
+    system: c.system,
+    code: c.code,
+    display: c.display,
+  }));
+}
+
+function valueSetElementToCodeableConcept(elements: ValueSetExpansionContains[]): CodeableConcept | undefined {
+  if (elements.length === 0) {
+    return undefined;
+  }
+  return {
+    coding: elements.map((e) => ({
+      system: e.system,
+      code: e.code,
+      display: e.display,
+    })),
+  };
+}

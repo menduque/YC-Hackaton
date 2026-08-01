@@ -1,0 +1,80 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import { buildElementsContext } from '@medplum/core';
+import type { Meta } from '@storybook/react';
+import type { JSX } from 'react';
+import { Document } from '../Document/Document';
+import { ElementsContext } from '../ElementsInput/ElementsInput.utils';
+import { maybeWrapWithContext } from '../utils/maybeWrapWithContext';
+import { RangeInput } from './RangeInput';
+
+export default {
+  title: 'Medplum/RangeInput',
+  component: RangeInput,
+} as Meta;
+
+export const Basic = (): JSX.Element => (
+  <Document>
+    <RangeInput
+      path=""
+      name="range"
+      defaultValue={{
+        low: {
+          comparator: '>',
+          value: 10,
+          unit: 'mg',
+        },
+      }}
+    />
+  </Document>
+);
+
+export const Disabled = (): JSX.Element => (
+  <Document>
+    <RangeInput
+      disabled
+      path=""
+      name="range"
+      defaultValue={{
+        low: {
+          comparator: '>',
+          value: 10,
+          unit: 'mg',
+        },
+      }}
+    />
+  </Document>
+);
+
+export const PartiallyDisabled = (): JSX.Element => {
+  const context = buildElementsContext({
+    parentContext: undefined,
+    path: 'SpecimenDefinition',
+    elements: {},
+    accessPolicyResource: {
+      resourceType: 'SpecimenDefinition',
+      readonlyFields: ['handling.temperatureRange.high'],
+    },
+  });
+  if (!context) {
+    return <div>Context unexpectedly undefined</div>;
+  }
+
+  return maybeWrapWithContext(
+    ElementsContext.Provider,
+    context,
+    <Document>
+      <RangeInput
+        path="SpecimenDefinition.handling.temperatureRange"
+        name="range"
+        defaultValue={{
+          low: {
+            comparator: '>',
+            value: 10,
+            unit: 'mg',
+          },
+        }}
+      />
+    </Document>
+  );
+};

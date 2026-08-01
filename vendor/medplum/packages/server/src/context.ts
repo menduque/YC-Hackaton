@@ -1,0 +1,293 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { ProfileResource, WithId } from '@medplum/core';
+import { Logger, OperationOutcomeError, badRequest, forbidden, isUUID, parseLogLevel } from '@medplum/core';
+import type {
+  Bot,
+  ClientApplication,
+  Extension,
+  Login,
+  Project,
+  ProjectMembership,
+  Reference,
+} from '@medplum/fhirtypes';
+import type { NextFunction, Request, Response } from 'express';
+import { randomUUID } from 'node:crypto';
+import { getConfig } from './config/loader';
+import { getRepoForLogin } from './fhir/accesspolicy';
+import { FhirRateLimiter, getFhirQuotaConfig } from './fhir/fhirquota';
+import type { Repository, SystemRepository } from './fhir/repo';
+import { ResourceCap } from './fhir/resource-cap';
+import { getLogger, globalLogger, writeLineToStdout } from './logger';
+import type { AuthState } from './oauth/middleware';
+import { authenticateTokenImpl } from './oauth/middleware';
+import { getRateLimitRedis } from './redis';
+import type { IRequestContext } from './request-context-store';
+import { requestContextStore } from './request-context-store';
+import { parseTraceparent } from './traceparent';
+
+export class RequestContext implements IRequestContext {
+  readonly requestId: string;
+  readonly traceId: string;
+  readonly logger: Logger;
+
+  constructor(requestId: string, traceId: string, logger?: Logger, loggerMetadata?: Record<string, any>) {
+    this.requestId = requestId;
+    this.traceId = traceId;
+    this.logger =
+      logger ??
+      new Logger(
+        writeLineToStdout,
+        { ...loggerMetadata, requestId, traceId },
+        parseLogLevel(getConfig().logLevel ?? 'info')
+      );
+  }
+
+  [Symbol.dispose](): void {
+    // No-op, descendants may override
+  }
+
+  static empty(): RequestContext {
+    return new RequestContext('', '');
+  }
+}
+
+export type AuthenticatedContextOptions = {
+  logger?: Logger;
+  async?: boolean;
+};
+
+export class AuthenticatedRequestContext extends RequestContext {
+  readonly authState: Readonly<AuthState>;
+  readonly repo: Repository;
+  readonly isAsync: boolean;
+  readonly fhirRateLimiter?: FhirRateLimiter;
+  readonly resourceCap?: ResourceCap;
+
+  constructor(
+    requestId: string,
+    traceId: string,
+    authState: Readonly<AuthState>,
+    repo: Repository,
+    options?: AuthenticatedContextOptions
+  ) {
+    let loggerMetadata: Record<string, any> | undefined;
+    const projectId = repo.currentProject()?.id;
+    if (projectId) {
+      let profile = authState.membership.profile.reference;
+      const asUserProfile = authState.onBehalfOfMembership?.profile.reference;
+      if (asUserProfile && asUserProfile !== profile) {
+        profile += ` (as ${asUserProfile})`;
+      }
+      loggerMetadata = { projectId, profile };
+    }
+    super(requestId, traceId, options?.logger, loggerMetadata);
+
+    this.fhirRateLimiter = getFhirRateLimiter(authState, this.logger);
+    this.resourceCap = getResourceCap(authState, this.logger);
+
+    this.authState = authState;
+    this.repo = repo;
+    this.isAsync = options?.async ?? false;
+  }
+
+  get project(): WithId<Project> {
+    return this.authState.project;
+  }
+
+  get membership(): WithId<ProjectMembership> {
+    return this.authState.onBehalfOfMembership ?? this.authState.membership;
+  }
+
+  get login(): Login {
+    return this.authState.login;
+  }
+
+  get profile(): Reference<ProfileResource | Bot | ClientApplication> {
+    return this.membership.profile;
+  }
+
+  get authentication(): Readonly<AuthState> {
+    return this.authState;
+  }
+
+  /**
+   * @returns a SystemRepository for the same shard as this context's repository.
+   * Use this when you need elevated privileges within request handling.
+   */
+  get systemRepo(): SystemRepository {
+    return this.repo.getSystemRepo();
+  }
+
+  [Symbol.dispose](): void {
+    this.repo[Symbol.dispose]();
+  }
+}
+
+export function tryGetRequestContext(): IRequestContext | undefined {
+  return requestContextStore.getStore();
+}
+
+export function getRequestContext(): IRequestContext {
+  const ctx = requestContextStore.getStore();
+  if (!ctx) {
+    throw new Error('No request context available');
+  }
+  return ctx;
+}
+
+export function getAuthenticatedContext(): AuthenticatedRequestContext {
+  const ctx = getRequestContext();
+  if (!(ctx instanceof AuthenticatedRequestContext)) {
+    throw new Error('Request is not authenticated');
+  }
+  return ctx;
+}
+
+export async function attachRequestContext(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const { requestId, traceId } = requestIds(req);
+  let ctx: RequestContext | undefined;
+  try {
+    const result = await authenticateTokenImpl(req);
+    if (result) {
+      const { authState, repo } = result;
+      ctx = new AuthenticatedRequestContext(requestId, traceId, authState, repo);
+    }
+  } catch (err: any) {
+    // Ensure next() is called in a request context, so later middleware (e.g. logging) can run correctly
+    ctx ??= new RequestContext(requestId, traceId);
+    requestContextStore.run(ctx, () => {
+      getLogger().error('Authentication error', { err: err.toString(), stack: err.stack });
+      const outcome = badRequest('Authentication error');
+      outcome.issue[0].diagnostics = err.toString();
+      const wrappedErr = new OperationOutcomeError(outcome, { cause: err });
+      next(wrappedErr);
+    });
+    return;
+  }
+
+  ctx ??= new RequestContext(requestId, traceId);
+  requestContextStore.run(ctx, () => next());
+}
+
+export function closeRequestContext(): void {
+  const ctx = requestContextStore.getStore();
+  if (ctx) {
+    ctx[Symbol.dispose]();
+  }
+}
+
+export function tryRunInRequestContext<T>(requestId: string | undefined, traceId: string | undefined, fn: () => T): T {
+  if (requestId && traceId) {
+    return requestContextStore.run(new RequestContext(requestId, traceId), fn);
+  } else {
+    return fn();
+  }
+}
+
+export async function runInAuthenticatedContext<T>(
+  authState: Readonly<AuthState>,
+  requestId: string | undefined,
+  traceId: string | undefined,
+  options: AuthenticatedContextOptions | undefined,
+  fn: () => T
+): Promise<T> {
+  const repo = await getRepoForLogin(authState, true);
+  requestId ??= randomUUID();
+  traceId ??= randomUUID();
+
+  return requestContextStore.run(new AuthenticatedRequestContext(requestId, traceId, authState, repo, options), fn);
+}
+
+export function getTraceId(req: Request): string | undefined {
+  const xTraceId = req.header('x-trace-id');
+  if (xTraceId && isUUID(xTraceId)) {
+    return xTraceId;
+  }
+
+  const traceparent = req.header('traceparent');
+  if (traceparent && parseTraceparent(traceparent)) {
+    return traceparent;
+  }
+
+  const amznTraceId = req.header('x-amzn-trace-id');
+  if (amznTraceId) {
+    return extractAmazonTraceId(amznTraceId);
+  }
+
+  return undefined;
+}
+
+export function extractAmazonTraceId(amznTraceId: string): string | undefined {
+  // https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-request-tracing.html
+  // Definition: Field=version-time-id
+  // Example header: X-Amzn-Trace-Id: Root=1-67891233-abcdef012345678912345678
+  // Example header: X-Amzn-Trace-Id: Self=1-67891233-12456789abcdef012345678;Root=1-67891233-abcdef012345678912345678
+  // Example in Athena: "TID_e0fbe3c75b3c5a45ab84fb156906649b"
+  const regex = /(?:Root|Self)=([^;]+)/;
+  const match = regex.exec(amznTraceId);
+  return match ? match[1] : undefined;
+}
+
+export function buildTracingExtension(): Extension | undefined {
+  const ctx = tryGetRequestContext();
+
+  if (ctx === undefined) {
+    return undefined;
+  }
+
+  const subExtensions: Extension[] = [];
+  if (ctx.requestId) {
+    subExtensions.push({ url: 'requestId', valueId: ctx.requestId });
+  }
+
+  if (ctx.traceId) {
+    subExtensions.push({ url: 'traceId', valueId: ctx.traceId });
+  }
+
+  if (subExtensions.length === 0) {
+    return undefined;
+  }
+
+  return {
+    url: 'https://medplum.com/fhir/StructureDefinition/tracing',
+    extension: subExtensions,
+  };
+}
+
+function requestIds(req: Request): { requestId: string; traceId: string } {
+  const requestId = randomUUID();
+  const traceId = getTraceId(req) ?? randomUUID();
+
+  return { requestId, traceId };
+}
+
+function getFhirRateLimiter(authState: AuthState, logger?: Logger): FhirRateLimiter | undefined {
+  if (!getConfig().rateLimitsEnabled) {
+    return undefined;
+  }
+
+  const { userLimit, projectLimit } = getFhirQuotaConfig(authState);
+  return authState.membership
+    ? new FhirRateLimiter(getRateLimitRedis(), authState, userLimit, projectLimit, logger ?? globalLogger)
+    : undefined;
+}
+
+function getResourceCap(authState: AuthState, logger?: Logger): ResourceCap | undefined {
+  if (!getConfig().rateLimitsEnabled) {
+    return undefined;
+  }
+
+  const projectLimit = authState.project?.systemSetting?.find((s) => s.name === 'resourceCap')?.valueInteger;
+  return authState.membership && projectLimit
+    ? new ResourceCap(getRateLimitRedis(), authState, projectLimit, logger ?? globalLogger)
+    : undefined;
+}
+
+export function requireSuperAdmin(): AuthenticatedRequestContext {
+  const ctx = getAuthenticatedContext();
+  if (!ctx.project.superAdmin) {
+    throw new OperationOutcomeError(forbidden);
+  }
+  return ctx;
+}

@@ -1,0 +1,50 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { Hl7Message } from '@medplum/core';
+import type { Hl7Connection } from './connection';
+
+export class Hl7MessageEvent extends Event {
+  readonly connection: Hl7Connection;
+  readonly message: Hl7Message;
+
+  constructor(connection: Hl7Connection, message: Hl7Message) {
+    super('message');
+    this.connection = connection;
+    this.message = message;
+  }
+}
+
+export class Hl7EnhancedAckSentEvent extends Event {
+  readonly connection: Hl7Connection;
+  readonly message: Hl7Message;
+
+  constructor(connection: Hl7Connection, message: Hl7Message) {
+    super('enhancedAckSent');
+    this.connection = connection;
+    this.message = message;
+  }
+}
+
+export class Hl7ErrorEvent extends Event {
+  readonly error: Error;
+
+  constructor(error: Error) {
+    super('error');
+    this.error = error;
+  }
+}
+
+export class Hl7WarningEvent extends Event {
+  readonly error: Error;
+
+  constructor(error: Error) {
+    super('warning');
+    this.error = error;
+  }
+}
+
+export class Hl7CloseEvent extends Event {
+  constructor() {
+    super('close');
+  }
+}

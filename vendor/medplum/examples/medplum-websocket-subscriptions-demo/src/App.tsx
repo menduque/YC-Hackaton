@@ -1,0 +1,68 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import { getReferenceString } from '@medplum/core';
+import {
+  AppShell,
+  ErrorBoundary,
+  Loading,
+  Logo,
+  NotificationIcon,
+  useMedplum,
+  useMedplumProfile,
+} from '@medplum/react';
+import { IconClipboardCheck, IconHome, IconMail } from '@tabler/icons-react';
+import type { JSX } from 'react';
+import { Suspense } from 'react';
+import { Route, Routes } from 'react-router';
+import { HomePage } from './pages/HomePage';
+import { LandingPage } from './pages/LandingPage';
+import { SignInPage } from './pages/SignInPage';
+
+export function App(): JSX.Element | null {
+  const medplum = useMedplum();
+  const profile = useMedplumProfile();
+
+  if (medplum.isLoading()) {
+    return null;
+  }
+
+  return (
+    <AppShell
+      logo={<Logo size={24} />}
+      menus={[{ links: [{ label: 'Home', href: '/', icon: <IconHome /> }] }]}
+      resourceTypeSearchDisabled={true}
+      headerSearchDisabled={true}
+      notifications={
+        profile && (
+          <>
+            <NotificationIcon
+              label="Mail"
+              resourceType="Communication"
+              countCriteria={`recipient=${getReferenceString(profile)}&status:not=completed&_summary=count`}
+              subscriptionCriteria={`Communication?recipient=${getReferenceString(profile)}`}
+              iconComponent={<IconMail />}
+              onClick={() => console.log('foo')}
+            />
+            <NotificationIcon
+              label="Tasks"
+              resourceType="Task"
+              countCriteria={`owner=${getReferenceString(profile)}&status:not=completed&_summary=count`}
+              subscriptionCriteria={`Task?owner=${getReferenceString(profile)}`}
+              iconComponent={<IconClipboardCheck />}
+              onClick={() => console.log('foo')}
+            />
+          </>
+        )
+      }
+    >
+      <ErrorBoundary>
+        <Suspense fallback={<Loading />}>
+          <Routes>
+            <Route path="/" element={profile ? <HomePage /> : <LandingPage />} />
+            <Route path="/signin" element={<SignInPage />} />
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
+    </AppShell>
+  );
+}

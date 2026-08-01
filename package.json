@@ -1,0 +1,20 @@
+{
+  "name": "yc-hackaton-root",
+  "private": true,
+  "type": "module",
+  "description": "Repo-level tooling: Medplum CLI + Stedi/Medplum scripts. The app lives in app/.",
+  "scripts": {
+    "medplum": "medplum",
+    "medplum:login": "medplum login",
+    "medplum:whoami": "medplum whoami",
+    "medplum:projects": "medplum project list",
+    "project:init": "node scripts/medplum-project-init.mjs",
+    "stedi": "node scripts/stedi-eligibility.mjs"
+  },
+  "devDependencies": {
+    "@medplum/cli": "^5.1.27"
+  },
+  "dependencies": {
+    "@medplum/fhirtypes": "^5.1.27"
+  }
+}

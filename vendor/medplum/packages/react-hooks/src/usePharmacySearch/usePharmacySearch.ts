@@ -1,0 +1,73 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+
+import type { AddFavoriteParams, AddPharmacyResponse, PharmacySearchParams } from '@medplum/core';
+import { isAddPharmacyResponse, isOrganizationArray, resolveId } from '@medplum/core';
+import type { Identifier, Organization } from '@medplum/fhirtypes';
+import { useCallback } from 'react';
+import { useMedplum } from '../MedplumProvider/MedplumProvider.context';
+
+export interface UsePharmacySearchReturn<T extends PharmacySearchParams = PharmacySearchParams> {
+  searchPharmacies: (params: T) => Promise<Organization[]>;
+  addToFavorites: (params: AddFavoriteParams) => Promise<AddPharmacyResponse>;
+}
+
+/**
+ * Generic React hook that provides pharmacy search and add-to-favorites
+ * functionality for any e-prescribing integration.
+ *
+ * Encapsulates calls to a search-pharmacy bot and an add-patient-pharmacy bot,
+ * and can be composed with the generic `PharmacyDialog` component from `@medplum/react`.
+ *
+ * The search param type is generic so vendor hooks can widen it with their own
+ * filters (e.g. ScriptSure `specialties`); the extra keys are passed through to
+ * the bot as-is at runtime.
+ *
+ * @param searchBotIdentifier - Bot identifier for the pharmacy search bot.
+ * @param addPharmacyBotIdentifier - Bot identifier for the add-patient-pharmacy bot.
+ * @returns An object with `searchPharmacies` and `addToFavorites` callbacks.
+ */
+export function usePharmacySearch<T extends PharmacySearchParams = PharmacySearchParams>(
+  searchBotIdentifier: Identifier,
+  addPharmacyBotIdentifier: Identifier
+): UsePharmacySearchReturn<T> {
+  const medplum = useMedplum();
+
+  const searchPharmacies = useCallback(
+    async (params: T): Promise<Organization[]> => {
+      const { organization, ...searchParams } = params;
+      const organizationId = resolveId(organization);
+      const response = await medplum.executeBot(
+        searchBotIdentifier,
+        organizationId ? { ...searchParams, organizationId } : searchParams
+      );
+
+      if (!isOrganizationArray(response)) {
+        throw new Error('Invalid response from pharmacy search');
+      }
+
+      return response;
+    },
+    [medplum, searchBotIdentifier]
+  );
+
+  const addToFavorites = useCallback(
+    async (params: AddFavoriteParams): Promise<AddPharmacyResponse> => {
+      const response = await medplum.executeBot(addPharmacyBotIdentifier, {
+        patientId: params.patientId,
+        pharmacy: params.pharmacy,
+        setAsPrimary: params.setAsPrimary,
+        organizationId: resolveId(params.organization),
+      });
+
+      if (!isAddPharmacyResponse(response)) {
+        throw new Error('Invalid response from add pharmacy bot');
+      }
+
+      return response;
+    },
+    [medplum, addPharmacyBotIdentifier]
+  );
+
+  return { searchPharmacies, addToFavorites };
+}

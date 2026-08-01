@@ -1,0 +1,49 @@
+{
+  "name": "@medplum/agent",
+  "version": "5.1.27",
+  "description": "Medplum Agent",
+  "homepage": "https://www.medplum.com/",
+  "bugs": {
+    "url": "https://github.com/medplum/medplum/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/medplum/medplum.git",
+    "directory": "packages/agent"
+  },
+  "license": "Apache-2.0",
+  "author": "Medplum <hello@medplum.com>",
+  "type": "commonjs",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "agent": "tsx src/main.ts",
+    "build": "npm run clean && tsc && node esbuild.mjs",
+    "clean": "rimraf dist",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@medplum/core": "5.1.27",
+    "@medplum/hl7": "5.1.27",
+    "dcmjs-dimse": "0.3.3",
+    "iconv-lite": "0.7.3",
+    "semver": "7.8.5",
+    "winston": "3.19.0",
+    "winston-daily-rotate-file": "5.0.0",
+    "ws": "8.21.1"
+  },
+  "devDependencies": {
+    "@medplum/fhirtypes": "5.1.27",
+    "@medplum/mock": "5.1.27",
+    "@types/async-eventemitter": "0.2.4",
+    "@types/ws": "8.18.1",
+    "mock-socket": "9.3.1",
+    "postject": "1.0.0-alpha.6"
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.2.0"
+  }
+}

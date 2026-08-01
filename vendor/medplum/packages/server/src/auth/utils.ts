@@ -1,0 +1,487 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { ProfileResource, WithId } from '@medplum/core';
+import {
+  badRequest,
+  createReference,
+  getReferenceString,
+  OperationOutcomeError,
+  Operator,
+  resolveId,
+} from '@medplum/core';
+import type {
+  ContactPoint,
+  Login,
+  OperationOutcome,
+  Project,
+  ProjectMembership,
+  Reference,
+  User,
+} from '@medplum/fhirtypes';
+import bcrypt from 'bcrypt';
+import type { Handler, NextFunction, Request, Response } from 'express';
+import { randomInt } from 'node:crypto';
+import { authenticator } from 'otplib';
+import { toDataURL } from 'qrcode';
+import { getConfig } from '../config/loader';
+import { EMAIL_MFA_CODE_EXPIRATION_MS, MAX_PASSWORD_LENGTH } from '../constants';
+import { sendEmail } from '../email/email';
+import { getProjectAppName } from '../email/utils';
+import { sendOutcome } from '../fhir/outcomes';
+import type { SystemRepository } from '../fhir/repo';
+import { getGlobalSystemRepo, getShardSystemRepo } from '../fhir/repo';
+import { rewriteAttachments, RewriteMode } from '../fhir/rewrite';
+import { TODO_SHARD_ID } from '../fhir/sharding';
+import { getLogger } from '../logger';
+import { getClientApplication, getMembershipsForLogin } from '../oauth/utils';
+
+export type MfaMethod = 'totp' | 'email';
+
+/** App name used in MFA emails for projects that have not been white-labeled. */
+const DEFAULT_APP_NAME = 'Medplum';
+
+/** Authenticator app issuer used for projects that have not been white-labeled. */
+const DEFAULT_MFA_ISSUER = 'medplum.com';
+
+/**
+ * Returns the MFA methods that a project allows users to enroll in.
+ * Controlled by the `allowedMfaMethods` project setting, a comma-delimited
+ * string (e.g. "totp", "email", or "totp,email"). When unset, only TOTP
+ * authenticator enrollment is offered, preserving the historical behavior.
+ * @param project - The project to read the setting from.
+ * @returns The list of allowed MFA methods.
+ */
+export function getAllowedMfaMethods(project: Project | undefined): MfaMethod[] {
+  const value = project?.setting?.find((s) => s.name === 'allowedMfaMethods')?.valueString;
+  if (!value) {
+    return ['totp'];
+  }
+  const methods = value
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s): s is MfaMethod => s === 'totp' || s === 'email');
+  return methods.length > 0 ? methods : ['totp'];
+}
+
+/**
+ * Determines whether MFA is required for a user logging in to a project.
+ *
+ * The project's `mfaRequired` setting (a boolean) can only *tighten* the
+ * requirement: enabling it forces MFA across the whole project even for users
+ * whose own `User.mfaRequired` flag is unset or `false`. It never relaxes a
+ * user who individually requires MFA.
+ * @param user - The user logging in.
+ * @param project - The project the user is logging in to, if known.
+ * @returns True if the user must use MFA.
+ */
+export function isMfaRequired(user: User, project: Project | undefined): boolean {
+  const projectMfaRequired = project?.setting?.find((s) => s.name === 'mfaRequired')?.valueBoolean;
+  return Boolean(projectMfaRequired) || Boolean(user.mfaRequired);
+}
+
+/**
+ * Builds the authenticator (TOTP) enrollment payload for a user, generating and
+ * persisting an `mfaSecret` first if the user does not have one.
+ *
+ * A secret is only created up front when a user is invited with `mfaRequired`,
+ * so a user who comes under a requirement later — for example when the
+ * project-wide `mfaRequired` setting is enabled — reaches enrollment without
+ * one. Generating on demand keeps the QR code usable in that case. Users who
+ * already have a secret keep it, so the URI is stable across repeated calls.
+ *
+ * The issuer is the project's app name and the account name identifies the user,
+ * so the entry reads as "Acme Health" / "alice@example.com" in the user's
+ * authenticator app. Authenticator apps show the issuer as the entry's title, so
+ * it is the part that carries the branding; the Key URI spec forbids colons in
+ * either field because apps split the label on the first one. Projects without an
+ * `appName` keep the `medplum.com` issuer.
+ * @param repo - The system repository used to persist a newly generated secret.
+ * @param user - The user enrolling in an authenticator app.
+ * @param project - The project the user is logging in to, if known.
+ * @returns The enrollment URI and a QR code data URL for it.
+ */
+export async function buildTotpEnrollment(
+  repo: SystemRepository,
+  user: WithId<User>,
+  project: Project | undefined
+): Promise<{ enrollUri: string; enrollQrCode: string }> {
+  let mfaSecret = user.mfaSecret;
+  if (!mfaSecret) {
+    mfaSecret = authenticator.generateSecret();
+    await repo.updateResource<User>({ ...user, mfaSecret });
+  }
+  const issuer = (getProjectAppName(project) ?? DEFAULT_MFA_ISSUER).replaceAll(':', '');
+  const enrollUri = authenticator.keyuri(user.email ?? user.id, issuer, mfaSecret);
+  return { enrollUri, enrollQrCode: await toDataURL(enrollUri) };
+}
+
+/**
+ * Returns the MFA methods that a user has enrolled in.
+ * Existing users enrolled before the introduction of `User.mfaMethod` are
+ * treated as TOTP, which was the only method at the time.
+ * @param user - The user.
+ * @returns The list of enrolled MFA methods, or an empty array if not enrolled.
+ */
+export function getEnrolledMfaMethods(user: User): MfaMethod[] {
+  if (user.mfaMethod && user.mfaMethod.length > 0) {
+    return user.mfaMethod;
+  }
+  return user.mfaEnrolled ? ['totp'] : [];
+}
+
+/**
+ * Generates a single-use 6-digit code for email-based MFA, stores a hash of it
+ * (along with its expiration time) on the login, and emails the code to the user.
+ * The code is cleared once it is verified (see verifyMfaToken).
+ * @param login - The login to attach the hashed code to.
+ * @param user - The user to email.
+ * @param project - The project the user is logging in to, if known. Supplies the
+ * app name in the message and any project-level SMTP configuration.
+ */
+export async function sendMfaEmailCode(
+  login: WithId<Login>,
+  user: User,
+  project: WithId<Project> | undefined
+): Promise<void> {
+  const systemRepo = getGlobalSystemRepo();
+  const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
+  const codeHash = await bcryptHashPassword(code);
+  const expiresAt = new Date(Date.now() + EMAIL_MFA_CODE_EXPIRATION_MS).toISOString();
+  await systemRepo.updateResource<Login>({ ...login, emailMfa: { codeHash, expiresAt } });
+  const expirationMinutes = Math.floor(EMAIL_MFA_CODE_EXPIRATION_MS / 60_000);
+  const appName = getProjectAppName(project) ?? DEFAULT_APP_NAME;
+  await sendEmail(
+    systemRepo,
+    {
+      to: user.email,
+      subject: `Your ${appName} verification code: ${code}`,
+      text: [
+        `Below is your requested ${appName} verification code. You can copy it into the open browser window to confirm your login.`,
+        '',
+        code,
+        '',
+        `This code will expire in ${expirationMinutes} minutes. If you did not try to sign in, you can safely ignore this email.`,
+        '',
+        'Thank you,',
+        `The ${appName} Team`,
+        '',
+      ].join('\n'),
+    },
+    project
+  );
+}
+
+/**
+ * Verifies that the supplied token matches the single-use email code stored on
+ * the login (and that it has not expired). Used both to complete email-based
+ * MFA enrollment and to satisfy the email factor when changing MFA settings.
+ * @param login - The login holding the hashed email code, if any.
+ * @param token - The user supplied 6-digit code.
+ * @returns True if the code matches and is unexpired.
+ */
+export async function verifyEmailMfaCode(login: Login, token: string | undefined): Promise<boolean> {
+  if (!token || !login.emailMfa) {
+    return false;
+  }
+  return new Date(login.emailMfa.expiresAt).getTime() >= Date.now() && bcrypt.compare(token, login.emailMfa.codeHash);
+}
+
+export async function createProfile(
+  systemRepo: SystemRepository,
+  project: Project,
+  resourceType: 'Patient' | 'Practitioner' | 'RelatedPerson',
+  firstName: string,
+  lastName: string,
+  email: string | undefined
+): Promise<WithId<ProfileResource>> {
+  const logger = getLogger();
+  logger.info('Creating profile', { resourceType, firstName, lastName });
+  let telecom: ContactPoint[] | undefined = undefined;
+  if (email) {
+    telecom = [{ system: 'email', use: 'work', value: email }];
+  }
+
+  const result = await systemRepo.createResource({
+    resourceType,
+    meta: {
+      project: project.id,
+    },
+    name: [
+      {
+        given: [firstName],
+        family: lastName,
+      },
+    ],
+    telecom,
+  } as ProfileResource);
+  logger.info('Created profile', { id: result.id });
+  return result;
+}
+
+export async function createProjectMembership(
+  systemRepo: SystemRepository,
+  user: User,
+  project: Project,
+  profile: ProfileResource,
+  details?: Partial<ProjectMembership>
+): Promise<WithId<ProjectMembership>> {
+  const logger = getLogger();
+  logger.info('Creating project membership', { name: project.name });
+
+  const result = await systemRepo.createResource<ProjectMembership>({
+    ...details,
+    resourceType: 'ProjectMembership',
+    project: createReference(project),
+    user: createReference(user),
+    profile: createReference(profile),
+  });
+  logger.info('Created project memberships', { id: result.id });
+  return result;
+}
+
+/**
+ * Reads the project associated with a login, if one is set.
+ * @param login - The login resource.
+ * @returns The project, or undefined if the login has no concrete project.
+ */
+export async function getLoginProject(login: Login): Promise<WithId<Project> | undefined> {
+  const reference = login.project?.reference;
+  if (!reference || reference === 'Project/new') {
+    return undefined;
+  }
+  try {
+    return await getGlobalSystemRepo().readReference<Project>(login.project as Reference<Project>);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Sends a login response to the client.
+ * If the user has multiple profiles, sends the list of profiles to choose from.
+ * Otherwise, sends the authorization code.
+ * @param res - The response object.
+ * @param login - The login details.
+ */
+export async function sendLoginResult(res: Response, login: Login): Promise<void> {
+  const systemRepo = getGlobalSystemRepo();
+  const user = await systemRepo.readReference<User>(login.user as Reference<User>);
+  const project = await getLoginProject(login);
+
+  if (isMfaRequired(user, project) && !user.mfaEnrolled && login.authMethod === 'password' && !login.mfaVerified) {
+    const { enrollUri, enrollQrCode } = await buildTotpEnrollment(systemRepo, user, project);
+    res.json({
+      login: login.id,
+      mfaEnrollRequired: true,
+      enrollUri,
+      enrollQrCode,
+      allowedMfaMethods: getAllowedMfaMethods(project),
+    });
+    return;
+  }
+
+  if (user.mfaEnrolled && login.authMethod === 'password' && !login.mfaVerified) {
+    const mfaMethods = getEnrolledMfaMethods(user);
+    // If email is the user's only MFA method, send the verification code
+    // immediately so they can enter it without any further interaction. A set
+    // emailMfa means a code has already been issued for this login, so
+    // don't re-send (e.g. when the login status endpoint is queried again).
+    if (mfaMethods.length === 1 && mfaMethods[0] === 'email' && !login.emailMfa) {
+      await sendMfaEmailCode(login as WithId<Login>, user, project);
+    }
+    res.json({ login: login.id, mfaRequired: true, mfaMethods, email: user.email });
+    return;
+  }
+
+  if (login.project?.reference === 'Project/new') {
+    // User is creating a new project.
+    res.json({ login: login.id });
+    return;
+  }
+
+  if (login.membership) {
+    // User only has one profile, so proceed
+    sendLoginCookie(res, login);
+    res.json({
+      login: login.id,
+      code: login.code,
+    });
+    return;
+  }
+
+  // User has multiple profiles, so the user needs to select
+  // Safe to rewrite attachments,
+  // because we know that these are all resources that the user has access to
+  const memberships = await getMembershipsForLogin(login);
+  const uniqueRefs = [...new Map(memberships.map((m) => [m.project.reference, m.project])).values()];
+  const projects = await systemRepo.readReferences<Project>(uniqueRefs);
+  const freshProjectMap = new Map<string, Reference<Project>>();
+  for (const project of projects) {
+    if (!(project instanceof Error)) {
+      freshProjectMap.set(getReferenceString(project), createReference(project));
+    }
+  }
+
+  const redactedMemberships = memberships.map((m) => ({
+    id: m.id,
+    project: m.project.reference ? freshProjectMap.get(m.project.reference) : m.project,
+    profile: m.profile,
+    identifier: m.identifier,
+  }));
+  res.json(
+    await rewriteAttachments(RewriteMode.PRESIGNED_URL, systemRepo, {
+      login: login.id,
+      memberships: redactedMemberships,
+    })
+  );
+}
+
+/**
+ * Adds a login cookie to the response if this is a OAuth2 client login.
+ * @param res - The response object.
+ * @param login - The login details.
+ */
+export function sendLoginCookie(res: Response, login: Login): void {
+  if (login.client) {
+    const cookieName = 'medplum-' + resolveId(login.client);
+    res.cookie(cookieName, login.cookie as string, {
+      maxAge: 3600 * 1000,
+      sameSite: 'none',
+      secure: true,
+      httpOnly: true,
+    });
+  }
+}
+
+/**
+ * Verifies the recaptcha response from the client.
+ * @param secretKey - The Recaptcha secret key to use for verification.
+ * @param recaptchaToken - The Recaptcha response from the client.
+ * @returns True on success, false on failure.
+ */
+export async function verifyRecaptcha(secretKey: string, recaptchaToken: string): Promise<boolean> {
+  const url =
+    'https://www.google.com/recaptcha/api/siteverify' +
+    '?secret=' +
+    encodeURIComponent(secretKey) +
+    '&response=' +
+    encodeURIComponent(recaptchaToken);
+
+  const response = await fetch(url, { method: 'POST', headers: { 'Accept-Encoding': 'identity' } });
+  const json = (await response.json()) as { success: boolean };
+  return json.success;
+}
+
+/**
+ * Returns project ID if clientId is provided.
+ * @param clientId - clientId from the client
+ * @param projectId - projectId from the client
+ * @returns The Project ID
+ * @throws OperationOutcomeError
+ */
+export async function getProjectIdByClientId(
+  clientId: string | undefined,
+  projectId: string | undefined
+): Promise<string | undefined> {
+  // For OAuth2 flow, check the clientId
+  if (clientId) {
+    const client = await getClientApplication(clientId);
+    const clientProjectId = client.meta?.project as string;
+    if (projectId !== undefined && projectId !== clientProjectId) {
+      throw new OperationOutcomeError(badRequest('Invalid projectId'));
+    }
+    return clientProjectId;
+  }
+
+  return projectId;
+}
+
+/**
+ * Returns a project by recaptcha site key.
+ * @param recaptchaSiteKey - reCAPTCHA site key from the client.
+ * @param projectId - Optional project ID from the client.
+ * @returns Project if found, otherwise undefined.
+ */
+export function getProjectByRecaptchaSiteKey(
+  recaptchaSiteKey: string,
+  projectId: string | undefined
+): Promise<WithId<Project> | undefined> {
+  const filters = [
+    {
+      code: 'recaptcha-site-key',
+      operator: Operator.EQUALS,
+      value: recaptchaSiteKey,
+    },
+  ];
+
+  if (projectId) {
+    filters.push({
+      code: '_id',
+      operator: Operator.EQUALS,
+      value: projectId,
+    });
+  }
+
+  const systemRepo = getShardSystemRepo(TODO_SHARD_ID); // not shard ready; would require searching all shards
+  return systemRepo.searchOne<Project>({ resourceType: 'Project', filters });
+}
+
+/**
+ * Returns the bcrypt hash of the password.
+ *
+ * Rejects passwords longer than {@link MAX_PASSWORD_LENGTH} bytes as a
+ * defense-in-depth backstop. Route validators are the front line, but enforcing
+ * the cap at the single hashing chokepoint means any current or future caller is
+ * protected regardless of the route it came through.
+ * @param password - The input password.
+ * @returns The bcrypt hash of the password.
+ */
+export function bcryptHashPassword(password: string): Promise<string> {
+  if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_LENGTH) {
+    throw new OperationOutcomeError(badRequest(`Password must be no more than ${MAX_PASSWORD_LENGTH} characters`));
+  }
+  return bcrypt.hash(password, getConfig().bcryptHashSalt);
+}
+
+export function validateRecaptcha(projectValidation?: (p: Project) => OperationOutcome | undefined): Handler {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const recaptchaSiteKey = req.body.recaptchaSiteKey;
+    const config = getConfig();
+    let secretKey: string | undefined = config.recaptchaSecretKey;
+
+    if (recaptchaSiteKey && recaptchaSiteKey !== config.recaptchaSiteKey) {
+      // If the recaptcha site key is not the main Medplum recaptcha site key,
+      // then it must be associated with a Project.
+      // The user can only authenticate with that project.
+      const project = await getProjectByRecaptchaSiteKey(recaptchaSiteKey, req.body.projectId);
+      if (!project) {
+        sendOutcome(res, badRequest('Invalid recaptchaSiteKey'));
+        return;
+      }
+      secretKey = project.site?.find((s) => s.recaptchaSiteKey === recaptchaSiteKey)?.recaptchaSecretKey;
+      if (!secretKey) {
+        sendOutcome(res, badRequest('Invalid recaptchaSecretKey'));
+        return;
+      }
+
+      const validationOutcome = projectValidation?.(project);
+      if (validationOutcome) {
+        sendOutcome(res, validationOutcome);
+        return;
+      }
+    }
+
+    if (secretKey) {
+      if (!req.body.recaptchaToken) {
+        sendOutcome(res, badRequest('Recaptcha token is required'));
+        return;
+      }
+
+      if (!(await verifyRecaptcha(secretKey, req.body.recaptchaToken))) {
+        sendOutcome(res, badRequest('Recaptcha failed'));
+        return;
+      }
+    }
+    next();
+  };
+}

@@ -1,0 +1,128 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import { MantineProvider } from '@mantine/core';
+import { MockClient } from '@medplum/mock';
+import { MedplumProvider } from '@medplum/react';
+import { MemoryRouter } from 'react-router';
+import { App } from './App';
+import type { UserEvent } from './test-utils/render';
+import { act, render, screen, userEvent } from './test-utils/render';
+
+const navigateMock = vi.fn();
+
+async function setup(url = '/'): Promise<UserEvent> {
+  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+  await act(async () => {
+    render(
+      <MemoryRouter initialEntries={[url]} initialIndex={0}>
+        <MedplumProvider medplum={new MockClient()} navigate={navigateMock}>
+          <MantineProvider>
+            <App />
+          </MantineProvider>
+        </MedplumProvider>
+      </MemoryRouter>
+    );
+  });
+
+  return user;
+}
+
+describe('App', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    vi.useRealTimers();
+  });
+
+  test('Click logo', async () => {
+    const user = await setup();
+    await openNav(user);
+
+    expect(screen.getByText('Patients')).toBeInTheDocument();
+    expect(screen.getByText('Settings')).toBeInTheDocument();
+    expect(screen.getByText('Security')).toBeInTheDocument();
+  });
+
+  test('Click profile', async () => {
+    const user = await setup();
+    await openMenu(user);
+
+    await user.click(screen.getByText('Account settings'));
+  });
+
+  test('Change profile', async () => {
+    const user = await setup();
+    await openMenu(user);
+
+    await user.click(screen.getByText('Switch to another project'));
+  });
+
+  test('Click sign out', async () => {
+    const user = await setup();
+    await openMenu(user);
+
+    await user.click(screen.getByText('Sign out'));
+  });
+
+  test('Active link', async () => {
+    const user = await setup('/ServiceRequest?status=active');
+    await openNav(user);
+
+    const activeLink = screen.getByText('Active Orders');
+    expect(activeLink.parentElement?.dataset?.['active']).toEqual('true');
+
+    const completedLink = screen.getByText('Completed Orders');
+    expect(completedLink.parentElement?.dataset?.['active']).toBeUndefined();
+  });
+
+  test('Resource Type Search', async () => {
+    const user = await setup();
+    await openNav(user);
+
+    const input = await screen.findByPlaceholderText('Resource Type');
+
+    // Enter random text
+    await user.type(input, 'Different');
+
+    await user.type(input, 'Test');
+
+    // Wait for the drop down
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    // Press the down arrow
+    await user.keyboard('{ArrowDown}');
+
+    // Press "Enter"
+    await user.keyboard('{Enter}');
+
+    expect(navigateMock).toHaveBeenCalledWith('/test-code');
+  });
+});
+
+function isNavOpen(): boolean {
+  return screen.getByTitle('Medplum Logo').closest('button')?.getAttribute('aria-expanded') === 'true';
+}
+
+async function openNav(user: UserEvent): Promise<void> {
+  if (!isNavOpen()) {
+    await user.click(screen.getByTitle('Medplum Logo'));
+  }
+}
+
+function isMenuOpen(): boolean {
+  return !!screen.queryByText('Sign out');
+}
+
+async function openMenu(user: UserEvent): Promise<void> {
+  if (!isMenuOpen()) {
+    await user.click(screen.getByRole('button', { name: 'User menu' }));
+    await screen.findByText('Sign out');
+  }
+}

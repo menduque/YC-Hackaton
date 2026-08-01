@@ -1,0 +1,119 @@
+.DS_Store
+
+# Local files for FileSystemBinaryStorage
+binary/
+
+# Node/npm
+node_modules/
+
+# Dotenv
+.env
+
+.failed
+prettier-fmt.err
+prettier-fmt1.err
+
+# Output
+dist/
+packages/core/docs/
+!packages/definitions/dist/fhir/
+!packages/fhirtypes/dist/
+packages/generator/output/
+packages/generator/compare.html
+packages/graphiql/public/
+
+# Storybook output
+storybook-static/
+
+# Chromatic
+packages/storybook/build-storybook.log
+
+# Jest code coverage
+coverage/
+
+# TypeScript incremental build
+tsconfig.tsbuildinfo
+tsconfig.build.tsbuildinfo
+
+# Tarballs
+*.tar.gz
+
+# Deb files
+*.deb
+
+# Turborepo
+.turbo
+
+# Rollup
+.rollup.cache/
+
+# All executables
+*.exe
+
+# All Java JAR files
+*.jar
+
+# All certificate files
+*.p12
+
+# Agent artifacts
+packages/agent/agent.properties
+packages/agent/src/.*-audit.json
+packages/agent/*agent-*-linux*
+packages/agent/sea-prep.blob
+packages/agent/src/upgrader-logs-*.txt
+packages/agent/src/medplum-agent-main-*.log
+packages/agent/src/medplum-agent-channels-*.log
+packages/agent/src/stop-service-logs-*.txt
+
+# CLI bulk-export downloads (default cwd when targetDirectory is omitted)
+packages/cli/*.ndjson
+
+# Local .terraform directories
+**/.terraform/*
+
+# .tfstate files
+*.tfstate
+*.tfstate.*
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Ignore override files as they are usually used to override resources locally and so
+# are not checked in
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Include override files you do wish to add to version control using negated pattern
+# !example_override.tf
+
+# Include tfplan files to ignore the plan output of command: terraform plan -out=tfplan
+# example: *tfplan*
+
+# Ignore CLI configuration files
+.terraformrc
+terraform.rc
+*.bak
+
+# Playwright
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Cursor
+.cursor/
+
+# Claude
+.claude/*
+!.claude/skills/
+CLAUDE.md
+AGENTS.md
+
+# 0x profiling data
+*.0x
+
+# Temp files
+temp/

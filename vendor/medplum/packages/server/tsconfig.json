@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "vitest/globals"],
+    "lib": ["esnext", "dom"],
+    "composite": true,
+    "rootDir": "src"
+  },
+  "references": [
+    { "path": "../core" },
+    { "path": "../ccda" },
+    { "path": "../definitions" },
+    { "path": "../fhir-router" }
+  ],
+  "include": ["src/**/*.ts", "src/**/*.json"]
+}

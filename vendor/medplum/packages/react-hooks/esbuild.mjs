@@ -1,0 +1,51 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+
+/* global process */
+/* global console */
+
+import dotenv from 'dotenv';
+import esbuild from 'esbuild';
+import { writeFileSync } from 'fs';
+
+dotenv.config({ quiet: true });
+
+const options = {
+  entryPoints: ['./src/index.ts'],
+  bundle: true,
+  platform: 'browser',
+  loader: { '.ts': 'ts', '.tsx': 'tsx' },
+  resolveExtensions: ['.js', '.ts', '.tsx'],
+  target: 'es2021',
+  tsconfig: 'tsconfig.json',
+  minify: true,
+  sourcemap: true,
+  define: {
+    'process.env.NODE_ENV': '"production"',
+  },
+  external: ['@medplum/core', '@medplum/fhir-router', '@medplum/mock', 'prop-types', 'react', 'react-dom'],
+};
+
+esbuild
+  .build({
+    ...options,
+    format: 'cjs',
+    outfile: './dist/cjs/index.cjs',
+  })
+  .then(() => writeFileSync('./dist/cjs/package.json', '{"type": "commonjs"}'))
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+
+esbuild
+  .build({
+    ...options,
+    format: 'esm',
+    outfile: './dist/esm/index.mjs',
+  })
+  .then(() => writeFileSync('./dist/esm/package.json', '{"type": "module"}'))
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });

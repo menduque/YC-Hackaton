@@ -1,0 +1,53 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { Binary } from '@medplum/fhirtypes';
+import type { Readable } from 'node:stream';
+import type { PresignedUrlOptions } from './base';
+
+/**
+ * Binary input type.
+ *
+ * This represents a possible input to the writeBinary function.
+ *
+ * Node.js pipeline types:
+ * type PipelineSource<T> = Iterable<T> | AsyncIterable<T> | NodeJS.ReadableStream | PipelineSourceFunction<T>;
+ *
+ * S3 input types:
+ * export type NodeJsRuntimeStreamingBlobPayloadInputTypes = string | Uint8Array | Buffer | Readable;
+ *
+ * Fetch response body types:
+ * The Fetch Standard exposes response bodies as WHATWG ReadableStreams. Convert them to Node.js Readable streams
+ * before passing them to binary storage.
+ */
+export type BinarySource = Readable | string;
+
+/**
+ * The BinaryStorage interface represents a method of reading and writing binary blobs.
+ */
+export interface BinaryStorage {
+  writeBinary(
+    binary: Binary,
+    filename: string | undefined,
+    contentType: string | undefined,
+    stream: BinarySource
+  ): Promise<void>;
+
+  writeFile(key: string, contentType: string | undefined, stream: BinarySource): Promise<void>;
+
+  readBinary(binary: Binary): Promise<Readable>;
+
+  readFile(key: string): Promise<Readable>;
+
+  copyBinary(sourceBinary: Binary, destinationBinary: Binary): Promise<void>;
+
+  copyFile(sourceKey: string, destinationKey: string): Promise<void>;
+
+  /**
+   * Deletes a file by its storage key. Implementations must be idempotent: deleting a key that
+   * does not exist resolves successfully rather than throwing.
+   * @param key - The storage key to delete.
+   */
+  deleteFile(key: string): Promise<void>;
+
+  getPresignedUrl(binary: Binary, opts?: PresignedUrlOptions): Promise<string>;
+}

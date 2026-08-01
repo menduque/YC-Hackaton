@@ -1,0 +1,89 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import { resolveId } from '@medplum/core';
+import type { Identifier, Organization, Reference } from '@medplum/fhirtypes';
+import { useEffect, useRef, useState } from 'react';
+import { useMedplum } from '../MedplumProvider/MedplumProvider.context';
+
+export interface MedicationIFrameOptions {
+  readonly patientId?: string;
+  /** Selected practice location for multi-practice deployments. */
+  readonly organization?: Reference<Organization>;
+  readonly onPatientSyncSuccess?: () => void;
+  readonly onIframeSuccess?: (url: string) => void;
+  readonly onError?: (err: unknown) => void;
+}
+
+/**
+ * Generic React hook that syncs a patient to a medication-order vendor and
+ * returns the chart iframe URL.
+ *
+ * Executes the patient-sync bot first (if patientId is provided), then
+ * the iframe bot to obtain the prescribing UI URL.
+ *
+ * Uses an effect cleanup flag so React 18 Strict Mode double-mount does not
+ * trigger duplicate bot executions.
+ *
+ * @param syncBotIdentifier - Bot identifier for the patient sync bot.
+ * @param iframeBotIdentifier - Bot identifier for the iframe URL bot.
+ * @param options - Configuration and callback options.
+ * @returns The medication-order iframe URL, or undefined while loading.
+ */
+export function useMedicationIFrame(
+  syncBotIdentifier: Identifier,
+  iframeBotIdentifier: Identifier,
+  options: MedicationIFrameOptions
+): string | undefined {
+  const medplum = useMedplum();
+  const { patientId, organization, onPatientSyncSuccess, onIframeSuccess, onError } = options;
+  const organizationId = resolveId(organization);
+  const [iframeUrl, setIframeUrl] = useState<string | undefined>(undefined);
+
+  const onPatientSyncSuccessRef = useRef(onPatientSyncSuccess);
+  const onIframeSuccessRef = useRef(onIframeSuccess);
+  const onErrorRef = useRef(onError);
+
+  useEffect(() => {
+    onPatientSyncSuccessRef.current = onPatientSyncSuccess;
+    onIframeSuccessRef.current = onIframeSuccess;
+    onErrorRef.current = onError;
+  }, [onPatientSyncSuccess, onIframeSuccess, onError]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async (): Promise<void> => {
+      try {
+        if (patientId) {
+          await medplum.executeBot(syncBotIdentifier, { patientId, organizationId });
+          if (cancelled) {
+            return;
+          }
+          onPatientSyncSuccessRef.current?.();
+        }
+        const result = await medplum.executeBot(iframeBotIdentifier, { patientId, organizationId });
+        if (cancelled) {
+          return;
+        }
+        if (result.url) {
+          setIframeUrl(result.url);
+          onIframeSuccessRef.current?.(result.url);
+        }
+      } catch (err: unknown) {
+        if (!cancelled) {
+          onErrorRef.current?.(err);
+        }
+      }
+    };
+
+    run().catch(() => {
+      // Handled via onErrorRef when !cancelled
+    });
+
+    return (): void => {
+      cancelled = true;
+    };
+  }, [medplum, syncBotIdentifier, iframeBotIdentifier, patientId, organizationId]);
+
+  return iframeUrl;
+}

@@ -1,8 +1,17 @@
+# Secrets — never commit
+.env
+.env.local
+*.local
+
 node_modules/
 dist/
 *.tsbuildinfo
-.env
-.env.local
 *.log
 .DS_Store
 .context/
+
+# vendor/medplum IS committed (see vendor/README.md), but never its build output
+# or installed deps — those are ~2GB if anyone runs npm install in there.
+vendor/medplum/**/node_modules/
+vendor/medplum/**/dist/
+vendor/medplum/**/.turbo/

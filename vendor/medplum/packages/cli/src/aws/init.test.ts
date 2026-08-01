@@ -1,0 +1,671 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import { ACMClient, ListCertificatesCommand, RequestCertificateCommand } from '@aws-sdk/client-acm';
+import { CloudFormationClient } from '@aws-sdk/client-cloudformation';
+import type { PublicKey } from '@aws-sdk/client-cloudfront';
+import { CloudFrontClient, CreatePublicKeyCommand } from '@aws-sdk/client-cloudfront';
+import { ECSClient } from '@aws-sdk/client-ecs';
+import { S3Client } from '@aws-sdk/client-s3';
+import { GetParameterCommand, PutParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
+import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
+import { mockClient } from 'aws-sdk-client-mock';
+import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import readline from 'node:readline';
+import type { Mock } from 'vitest';
+import { main } from '../index';
+import { mockReadline } from './test.utils';
+
+vi.mock('node:readline');
+
+const fetchMock = vi.spyOn(globalThis, 'fetch') as unknown as Mock;
+
+describe('init command', () => {
+  const configFiles = new Set<string>();
+
+  function refConfigFile(path: string): string {
+    configFiles.add(path);
+    return path;
+  }
+
+  function cleanupConfigFile(path: string): void {
+    if (existsSync(path)) {
+      unlinkSync(path);
+    }
+    configFiles.delete(path);
+  }
+
+  beforeAll(() => {
+    mockClient(CloudFormationClient);
+    mockClient(ECSClient);
+    mockClient(S3Client);
+  });
+
+  afterAll(() => {
+    for (const file of configFiles.values()) {
+      cleanupConfigFile(file);
+    }
+    // We add a special case for `medplum.foo.config.server.json` since that is the output config file from these tests
+    cleanupConfigFile('medplum.foo.config.server.json');
+  });
+
+  beforeEach(() => {
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValueOnce({
+      json: vi.fn().mockResolvedValueOnce([{ tag_name: 'v2.4.17' }]),
+    });
+
+    const cloudFrontClient = mockClient(CloudFrontClient);
+
+    cloudFrontClient.on(CreatePublicKeyCommand).resolves({ PublicKey: { Id: 'K1234' } as PublicKey });
+
+    const acmClient = mockClient(ACMClient);
+
+    acmClient.on(ListCertificatesCommand).resolves({
+      CertificateSummaryList: [
+        {
+          DomainName: 'example.com',
+        },
+        {
+          CertificateArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789013',
+          DomainName: 'api.existing.example.com',
+        },
+      ],
+    });
+
+    acmClient.on(RequestCertificateCommand).resolves({
+      CertificateArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+    });
+
+    const ssmClient = mockClient(SSMClient);
+
+    ssmClient.on(GetParameterCommand).rejects({ name: 'ParameterNotFound' });
+
+    ssmClient.on(PutParameterCommand).resolves({});
+
+    const stsClient = mockClient(STSClient);
+
+    stsClient.on(GetCallerIdentityCommand).resolves({
+      Account: '123456789012',
+    });
+  });
+
+  test('Init tool success', async () => {
+    const filename = refConfigFile(`test-${randomUUID()}.json`);
+
+    readline.createInterface = vi.fn(() =>
+      mockReadline(
+        'foo',
+        filename,
+        'us-east-1',
+        'account-123',
+        'TestStack',
+        'test.example.com',
+        'support@example.com',
+        '', // default API domain
+        '', // default app domain
+        '', // default storage domain
+        '', // default storage bucket
+        '', // default availability zones
+        'y', // Yes, create a database
+        '', // default database instances
+        '', // default server instances
+        '', // default server memory
+        '', // default server cpu
+        '', // default server image
+        'y', // Yes, request api certificate
+        '', // default DNS validation
+        'y', // Yes, request app certificate
+        '', // default DNS validation
+        'y', // Yes, request storage certificate
+        '', // default DNS validation
+        'y' // Yes, write to Parameter Store
+      )
+    );
+
+    await main(['node', 'index.js', 'aws', 'init']);
+
+    const config = JSON.parse(readFileSync(filename, 'utf8'));
+    expect(config).toMatchObject({
+      apiPort: 8103,
+      name: 'foo',
+      region: 'us-east-1',
+      accountNumber: 'account-123',
+      stackName: 'TestStack',
+      domainName: 'test.example.com',
+      apiDomainName: 'api.test.example.com',
+      appDomainName: 'app.test.example.com',
+      storageDomainName: 'storage.test.example.com',
+      storageBucketName: 'storage.test.example.com',
+      maxAzs: 2,
+      rdsInstances: 1,
+      desiredServerCount: 1,
+      serverMemory: 512,
+      serverCpu: 256,
+      serverImage: 'medplum/medplum-server:2.4.17',
+      storagePublicKey: expect.stringContaining('-----BEGIN PUBLIC KEY-----'),
+      apiSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+      appSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+      storageSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+    });
+    cleanupConfigFile(filename);
+  });
+
+  test('Overwrite existing file', async () => {
+    const filename = refConfigFile(`test-${randomUUID()}.json`);
+    writeFileSync(filename, '{}', 'utf8');
+
+    readline.createInterface = vi.fn(() =>
+      mockReadline(
+        'foo',
+        filename,
+        'y', // Yes, overwrite
+        'us-east-1',
+        'account-123',
+        'TestStack',
+        'test.example.com',
+        'support@example.com',
+        '', // default API domain
+        '', // default app domain
+        '', // default storage domain
+        '', // default storage bucket
+        '', // default availability zones
+        'y', // Yes, create a database
+        '', // default database instances
+        '', // default server instances
+        '', // default server memory
+        '', // default server cpu
+        '', // default server image
+        'y', // Yes, request api certificate
+        '', // default DNS validation
+        'y', // Yes, request app certificate
+        '', // default DNS validation
+        'y', // Yes, request storage certificate
+        '', // default DNS validation
+        'y' // Yes, write to Parameter Store
+      )
+    );
+
+    await main(['node', 'index.js', 'aws', 'init']);
+
+    const config = JSON.parse(readFileSync(filename, 'utf8'));
+    expect(config).toMatchObject({
+      apiPort: 8103,
+      name: 'foo',
+      region: 'us-east-1',
+      accountNumber: 'account-123',
+      stackName: 'TestStack',
+      domainName: 'test.example.com',
+      apiDomainName: 'api.test.example.com',
+      appDomainName: 'app.test.example.com',
+      storageDomainName: 'storage.test.example.com',
+      storageBucketName: 'storage.test.example.com',
+      maxAzs: 2,
+      rdsInstances: 1,
+      desiredServerCount: 1,
+      serverMemory: 512,
+      serverCpu: 256,
+      serverImage: 'medplum/medplum-server:2.4.17',
+      storagePublicKey: expect.stringContaining('-----BEGIN PUBLIC KEY-----'),
+      apiSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+      appSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+      storageSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+    });
+    cleanupConfigFile(filename);
+  });
+
+  test('Invalid AWS credentials', async () => {
+    const stsClient = mockClient(STSClient);
+    stsClient.on(GetCallerIdentityCommand).rejects(new Error('Invalid region'));
+
+    const acmClient = mockClient(ACMClient);
+    acmClient.on(ListCertificatesCommand).rejects(new Error('Invalid region'));
+    acmClient.on(RequestCertificateCommand).rejects(new Error('Invalid region'));
+
+    const filename = refConfigFile(`test-${randomUUID()}.json`);
+
+    console.log = vi.fn();
+
+    readline.createInterface = vi.fn(() =>
+      mockReadline(
+        'y', // Do you want to continue without AWS credentials?
+        'foo',
+        filename,
+        'us-bad-1', // Special fake region for mock clients
+        'account-123',
+        'TestStack',
+        'test.example.com',
+        'support@example.com',
+        '', // default API domain
+        '', // default app domain
+        '', // default storage domain
+        '', // default storage bucket
+        '', // default availability zones
+        'y', // Yes, create a database
+        '', // default database instances
+        '', // default server instances
+        '', // default server memory
+        '', // default server cpu
+        '', // default server image
+        'y', // Yes, request api certificate
+        '', // default DNS validation
+        'y', // Yes, request app certificate
+        '', // default DNS validation
+        'y', // Yes, request storage certificate
+        '', // default DNS validation
+        'y' // Yes, write to Parameter Store
+      )
+    );
+
+    await main(['node', 'index.js', 'aws', 'init']);
+
+    expect(console.log).toHaveBeenCalledWith('Warning: Unable to get AWS account ID', 'Invalid region');
+
+    const config = JSON.parse(readFileSync(filename, 'utf8'));
+    expect(config).toMatchObject({
+      apiPort: 8103,
+      name: 'foo',
+      region: 'us-bad-1',
+      accountNumber: 'account-123',
+      stackName: 'TestStack',
+      domainName: 'test.example.com',
+      apiDomainName: 'api.test.example.com',
+      appDomainName: 'app.test.example.com',
+      storageDomainName: 'storage.test.example.com',
+      storageBucketName: 'storage.test.example.com',
+      maxAzs: 2,
+      rdsInstances: 1,
+      desiredServerCount: 1,
+      serverMemory: 512,
+      serverCpu: 256,
+      serverImage: 'medplum/medplum-server:2.4.17',
+      storagePublicKey: expect.stringContaining('-----BEGIN PUBLIC KEY-----'),
+      apiSslCertArn: 'TODO',
+      appSslCertArn: 'TODO',
+      storageSslCertArn: 'TODO',
+    });
+    cleanupConfigFile(filename);
+  });
+
+  test('Bring your own database', async () => {
+    const filename = refConfigFile(`test-${randomUUID()}.json`);
+
+    readline.createInterface = vi.fn(() =>
+      mockReadline(
+        'foo',
+        filename,
+        'us-east-1',
+        'account-123',
+        'TestStack',
+        'test.example.com',
+        'support@example.com',
+        '', // default API domain
+        '', // default app domain
+        '', // default storage domain
+        '', // default storage bucket
+        '', // default availability zones
+        'n', // No, do not create a database
+        '', // default server instances
+        '', // default server memory
+        '', // default server cpu
+        '', // default server image
+        'y', // Yes, request api certificate
+        '', // default DNS validation
+        'y', // Yes, request app certificate
+        '', // default DNS validation
+        'y', // Yes, request storage certificate
+        '', // default DNS validation
+        'y' // Yes, write to Parameter Store
+      )
+    );
+
+    await main(['node', 'index.js', 'aws', 'init']);
+
+    const config = JSON.parse(readFileSync(filename, 'utf8'));
+    expect(config).toMatchObject({
+      apiPort: 8103,
+      name: 'foo',
+      region: 'us-east-1',
+      accountNumber: 'account-123',
+      stackName: 'TestStack',
+      domainName: 'test.example.com',
+      apiDomainName: 'api.test.example.com',
+      appDomainName: 'app.test.example.com',
+      storageDomainName: 'storage.test.example.com',
+      storageBucketName: 'storage.test.example.com',
+      maxAzs: 2,
+      rdsSecretsArn: 'TODO',
+      desiredServerCount: 1,
+      serverMemory: 512,
+      serverCpu: 256,
+      serverImage: 'medplum/medplum-server:2.4.17',
+      storagePublicKey: expect.stringContaining('-----BEGIN PUBLIC KEY-----'),
+      apiSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+      appSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+      storageSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+    });
+    cleanupConfigFile(filename);
+  });
+
+  test('Do not request SSL certs', async () => {
+    const filename = refConfigFile(`test-${randomUUID()}.json`);
+
+    readline.createInterface = vi.fn(() =>
+      mockReadline(
+        'foo',
+        filename,
+        'us-east-1',
+        'account-123',
+        'TestStack',
+        'test.example.com',
+        'support@example.com',
+        '', // default API domain
+        '', // default app domain
+        '', // default storage domain
+        '', // default storage bucket
+        '', // default availability zones
+        'y', // Yes, create a database
+        '', // default database instances
+        '', // default server instances
+        '', // default server memory
+        '', // default server cpu
+        '', // default server image
+        'n', // No api certificate
+        'n', // No app certificate
+        'n', // No storage certificate
+        'y' // Yes, write to Parameter Store
+      )
+    );
+
+    await main(['node', 'index.js', 'aws', 'init']);
+
+    const config = JSON.parse(readFileSync(filename, 'utf8'));
+    expect(config).toMatchObject({
+      apiPort: 8103,
+      name: 'foo',
+      region: 'us-east-1',
+      accountNumber: 'account-123',
+      stackName: 'TestStack',
+      domainName: 'test.example.com',
+      apiDomainName: 'api.test.example.com',
+      appDomainName: 'app.test.example.com',
+      storageDomainName: 'storage.test.example.com',
+      storageBucketName: 'storage.test.example.com',
+      maxAzs: 2,
+      rdsInstances: 1,
+      desiredServerCount: 1,
+      serverMemory: 512,
+      serverCpu: 256,
+      serverImage: 'medplum/medplum-server:2.4.17',
+      storagePublicKey: expect.stringContaining('-----BEGIN PUBLIC KEY-----'),
+      apiSslCertArn: 'TODO',
+      appSslCertArn: 'TODO',
+      storageSslCertArn: 'TODO',
+    });
+    cleanupConfigFile(filename);
+  });
+
+  test('Existing SSL certificates', async () => {
+    const filename = refConfigFile(`test-${randomUUID()}.json`);
+
+    readline.createInterface = vi.fn(() =>
+      mockReadline(
+        'foo',
+        filename,
+        'us-east-1',
+        'account-123',
+        'TestStack',
+        'existing.example.com',
+        'support@example.com',
+        '', // default API domain
+        '', // default app domain
+        '', // default storage domain
+        '', // default storage bucket
+        '', // default availability zones
+        'y', // Yes, create a database
+        '', // default database instances
+        '', // default server instances
+        '', // default server memory
+        '', // default server cpu
+        '', // default server image
+        'y', // Yes, request api certificate
+        '', // default DNS validation
+        'y', // Yes, request app certificate
+        '', // default DNS validation
+        'y', // Yes, request storage certificate
+        '', // default DNS validation
+        'y' // Yes, write to Parameter Store
+      )
+    );
+
+    await main(['node', 'index.js', 'aws', 'init']);
+
+    const config = JSON.parse(readFileSync(filename, 'utf8'));
+    expect(config).toMatchObject({
+      apiPort: 8103,
+      name: 'foo',
+      region: 'us-east-1',
+      accountNumber: 'account-123',
+      stackName: 'TestStack',
+      domainName: 'existing.example.com',
+      apiDomainName: 'api.existing.example.com',
+      appDomainName: 'app.existing.example.com',
+      storageDomainName: 'storage.existing.example.com',
+      storageBucketName: 'storage.existing.example.com',
+      maxAzs: 2,
+      rdsInstances: 1,
+      desiredServerCount: 1,
+      serverMemory: 512,
+      serverCpu: 256,
+      serverImage: 'medplum/medplum-server:2.4.17',
+      storagePublicKey: expect.stringContaining('-----BEGIN PUBLIC KEY-----'),
+      apiSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789013',
+      appSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+      storageSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+    });
+    cleanupConfigFile(filename);
+  });
+
+  test('Handle empty support email', async () => {
+    const filename = refConfigFile(`test-${randomUUID()}.json`);
+
+    readline.createInterface = vi.fn(() =>
+      mockReadline(
+        'foo',
+        filename,
+        'us-east-1',
+        'account-123',
+        'TestStack',
+        'test.example.com',
+        '', // Empty support email -- user will have to set manually later, but don't crash
+        '', // default API domain
+        '', // default app domain
+        '', // default storage domain
+        '', // default storage bucket
+        '', // default availability zones
+        'y', // Yes, create a database
+        '', // default database instances
+        '', // default server instances
+        '', // default server memory
+        '', // default server cpu
+        '', // default server image
+        'y', // Yes, request api certificate
+        '', // default DNS validation
+        'y', // Yes, request app certificate
+        '', // default DNS validation
+        'y', // Yes, request storage certificate
+        '', // default DNS validation
+        'y' // Yes, write to Parameter Store
+      )
+    );
+
+    await main(['node', 'index.js', 'aws', 'init']);
+
+    const config = JSON.parse(readFileSync(filename, 'utf8'));
+    expect(config).toMatchObject({
+      apiPort: 8103,
+      name: 'foo',
+      region: 'us-east-1',
+      accountNumber: 'account-123',
+      stackName: 'TestStack',
+      domainName: 'test.example.com',
+      apiDomainName: 'api.test.example.com',
+      appDomainName: 'app.test.example.com',
+      storageDomainName: 'storage.test.example.com',
+      storageBucketName: 'storage.test.example.com',
+      maxAzs: 2,
+      rdsInstances: 1,
+      desiredServerCount: 1,
+      serverMemory: 512,
+      serverCpu: 256,
+      serverImage: 'medplum/medplum-server:2.4.17',
+      storagePublicKey: expect.stringContaining('-----BEGIN PUBLIC KEY-----'),
+      apiSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+      appSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+      storageSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+    });
+    cleanupConfigFile(filename);
+  });
+
+  test('Existing parameter values', async () => {
+    const ssmClient = mockClient(SSMClient);
+    ssmClient.on(GetParameterCommand).resolves({
+      Parameter: {
+        Value: 'existing-value',
+      },
+    });
+    ssmClient.on(PutParameterCommand).resolves({});
+
+    const filename = refConfigFile(`test-${randomUUID()}.json`);
+
+    readline.createInterface = vi.fn(() =>
+      mockReadline(
+        'foo',
+        filename,
+        'us-east-1',
+        'account-123',
+        'TestStack',
+        'test.example.com',
+        'support@example.com',
+        '', // default API domain
+        '', // default app domain
+        '', // default storage domain
+        '', // default storage bucket
+        '', // default availability zones
+        'y', // Yes, create a database
+        '', // default database instances
+        '', // default server instances
+        '', // default server memory
+        '', // default server cpu
+        '', // default server image
+        'y', // Yes, request api certificate
+        '', // default DNS validation
+        'y', // Yes, request app certificate
+        '', // default DNS validation
+        'y', // Yes, request storage certificate
+        '', // default DNS validation
+        'y', // Yes, write to Parameter Store
+        'y', // Yes, overwrite port
+        'y', // Yes, overwrite baseUrl
+        'y', // Yes, overwrite appBaseUrl
+        'y', // Yes, overwrite storageBaseUrl
+        'y', // Yes, overwrite binaryStorage
+        'y', // Yes, overwrite signingKeyId
+        'y', // Yes, overwrite signingKey
+        'y', // Yes, overwrite signingKeyPassphrase
+        'y' // Yes, overwrite supportEmail
+      )
+    );
+
+    await main(['node', 'index.js', 'aws', 'init']);
+
+    const config = JSON.parse(readFileSync(filename, 'utf8'));
+    expect(config).toMatchObject({
+      apiPort: 8103,
+      name: 'foo',
+      region: 'us-east-1',
+      accountNumber: 'account-123',
+      stackName: 'TestStack',
+      domainName: 'test.example.com',
+      apiDomainName: 'api.test.example.com',
+      appDomainName: 'app.test.example.com',
+      storageDomainName: 'storage.test.example.com',
+      storageBucketName: 'storage.test.example.com',
+      maxAzs: 2,
+      rdsInstances: 1,
+      desiredServerCount: 1,
+      serverMemory: 512,
+      serverCpu: 256,
+      serverImage: 'medplum/medplum-server:2.4.17',
+      storagePublicKey: expect.stringContaining('-----BEGIN PUBLIC KEY-----'),
+      apiSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+      appSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+      storageSslCertArn: 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
+    });
+    cleanupConfigFile(filename);
+  });
+
+  test('No AWS credentials', async () => {
+    const stsClient = mockClient(STSClient);
+    stsClient.on(GetCallerIdentityCommand).rejects('GetCallerIdentityCommand failed');
+
+    const cloudFrontClient = mockClient(CloudFrontClient);
+    cloudFrontClient.on(CreatePublicKeyCommand).rejects('CreatePublicKeyCommand failed');
+
+    const filename = refConfigFile(`test-${randomUUID()}.json`);
+
+    readline.createInterface = vi.fn(() =>
+      mockReadline(
+        'y', // Yes, proceed without AWS credentials
+        'foo',
+        filename,
+        'us-east-1',
+        'account-123',
+        'TestStack',
+        'test.example.com',
+        'support@example.com',
+        '', // default API domain
+        '', // default app domain
+        '', // default storage domain
+        '', // default storage bucket
+        '', // default availability zones
+        'y', // Yes, create a database
+        '', // default database instances
+        '', // default server instances
+        '', // default server memory
+        '', // default server cpu
+        '', // default server image
+        'n', // No, do not request api certificate
+        'n', // No, do not request app certificate
+        'n', // No, do not request storage certificate
+        'n' // No, do not write to Parameter Store
+      )
+    );
+
+    await main(['node', 'index.js', 'aws', 'init']);
+
+    const config = JSON.parse(readFileSync(filename, 'utf8'));
+    expect(config).toMatchObject({
+      apiPort: 8103,
+      name: 'foo',
+      region: 'us-east-1',
+      accountNumber: 'account-123',
+      stackName: 'TestStack',
+      domainName: 'test.example.com',
+      apiDomainName: 'api.test.example.com',
+      appDomainName: 'app.test.example.com',
+      storageDomainName: 'storage.test.example.com',
+      storageBucketName: 'storage.test.example.com',
+      maxAzs: 2,
+      rdsInstances: 1,
+      desiredServerCount: 1,
+      serverMemory: 512,
+      serverCpu: 256,
+      serverImage: 'medplum/medplum-server:2.4.17',
+      apiSslCertArn: 'TODO',
+      appSslCertArn: 'TODO',
+      storageSslCertArn: 'TODO',
+    });
+    cleanupConfigFile(filename);
+  });
+});

@@ -1,0 +1,168 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import {
+  ContentType,
+  createReference,
+  Hl7Message,
+  MedplumClient,
+  normalizeErrorString,
+  normalizeOperationOutcome,
+} from '@medplum/core';
+import type { Binary } from '@medplum/fhirtypes';
+import fetch from 'node-fetch';
+import { createRequire } from 'node:module';
+import vm from 'node:vm';
+import { getConfig } from '../config/loader';
+import { getProjectSystemRepo } from '../fhir/repo';
+import { getBinaryStorage } from '../storage/loader';
+import { MockConsole } from '../util/console';
+import { readStreamToString } from '../util/streams';
+import type { BotExecutionContext, BotExecutionResult } from './types';
+
+/*
+ * SECURITY NOTE: VMContext Bots execute administrator-provided JavaScript inside
+ * a Node.js VM context. This is intentionally powerful and must be treated as
+ * unsafe for untrusted code.
+ *
+ * This execution mode is intended for:
+ *
+ * 1. Local development and testing, where the developer already controls the
+ * server process and could run arbitrary Node.js code directly.
+ *
+ * 2. Highly restricted production deployments where only trusted system
+ * administrators can create or update Bot executable code, and where the
+ * server is configured accordingly.
+ *
+ * This feature is disabled unless explicitly enabled by server configuration
+ * (`vmContextBotsEnabled`). It is not intended to be a sandbox boundary for
+ * hostile users, multi-tenant user-submitted code, or arbitrary third-party
+ * JavaScript execution.
+ *
+ * Security reports about this file should take that threat model into account.
+ * If untrusted users are able to install or modify Bots in a production system,
+ * that is a deployment/access-control issue and VMContext Bots should not be
+ * enabled in that environment.
+ */
+
+export const DEFAULT_VM_CONTEXT_TIMEOUT = 10000;
+
+/**
+ * Executes a Bot on the server in a separate Node.js VM.
+ * @param request - The bot request.
+ * @returns The bot execution result.
+ */
+export async function runInVmContext(request: BotExecutionContext): Promise<BotExecutionResult> {
+  const { bot, input, contentType, traceId, headers, runAs } = request;
+
+  const config = getConfig();
+  if (!config.vmContextBotsEnabled) {
+    return { success: false, logResult: 'VM Context bots not enabled on this server' };
+  }
+
+  const codeUrl = bot.executableCode?.url;
+  if (!codeUrl) {
+    return { success: false, logResult: 'No executable code' };
+  }
+  if (!codeUrl.startsWith('Binary/')) {
+    return { success: false, logResult: 'Executable code is not a Binary' };
+  }
+
+  const systemRepo = await getProjectSystemRepo(runAs.project);
+  const binary = await systemRepo.readReference<Binary>({ reference: codeUrl });
+  const stream = await getBinaryStorage().readBinary(binary);
+  const code = await readStreamToString(stream);
+  const botConsole = new MockConsole();
+
+  const sandbox = {
+    console: botConsole,
+    fetch,
+    require: createRequire(typeof __filename === 'undefined' ? import.meta.url : __filename),
+    process,
+    ContentType,
+    Hl7Message,
+    MedplumClient,
+    TextDecoder,
+    TextEncoder,
+    URL,
+    URLSearchParams,
+    event: {
+      bot: createReference(bot),
+      baseUrl: config.vmContextBaseUrl ?? config.baseUrl,
+      accessToken: request.accessToken,
+      requester: request.requester,
+      input: input instanceof Hl7Message ? input.toString() : input,
+      contentType,
+      secrets: request.secrets,
+      traceId,
+      headers,
+      defaultHeaders: request.defaultHeaders,
+      responseStream: request.responseStream,
+    },
+  };
+
+  const options: vm.RunningScriptOptions = {
+    timeout: bot.timeout ? bot.timeout * 1000 : DEFAULT_VM_CONTEXT_TIMEOUT,
+  };
+
+  // Wrap code in an async block for top-level await support
+  const wrappedCode = `
+  const exports = {};
+  const module = {exports};
+
+  // Start user code
+  ${code}
+  // End user code
+
+  (async () => {
+    const { bot, baseUrl, accessToken, requester, contentType, secrets, traceId, headers, defaultHeaders, responseStream } = event;
+    const medplum = new MedplumClient({
+      baseUrl,
+      defaultHeaders,
+      fetch: function(url, options = {}) {
+        options.headers ||= {};
+        options.headers['X-Trace-Id'] = traceId;
+        options.headers['traceparent'] = traceId;
+        return fetch(url, options);
+      },
+    });
+    medplum.setAccessToken(accessToken);
+    try {
+      let input = event.input;
+      if (contentType === ContentType.HL7_V2 && input) {
+        input = Hl7Message.parse(input);
+      }
+      let result = await exports.handler(medplum, { bot, requester, input, contentType, secrets, traceId, headers, responseStream });
+      if (contentType === ContentType.HL7_V2 && result) {
+        result = result.toString();
+      }
+      return result;
+    } catch (err) {
+      if (err instanceof Error) {
+        console.log("Unhandled error: " + err.message + "\\n" + err.stack);
+      } else if (typeof err === "object") {
+        console.log("Unhandled error: " + JSON.stringify(err, undefined, 2));
+      } else {
+        console.log("Unhandled error: " + err);
+      }
+      throw err;
+    }
+  })();
+  `;
+
+  // Return the result of the code execution
+  try {
+    const returnValue = await vm.runInNewContext(wrappedCode, sandbox, options);
+    return {
+      success: true,
+      logResult: botConsole.toString(),
+      returnValue,
+    };
+  } catch (err) {
+    botConsole.log('Error', normalizeErrorString(err));
+    return {
+      success: false,
+      logResult: botConsole.toString(),
+      returnValue: normalizeOperationOutcome(err),
+    };
+  }
+}

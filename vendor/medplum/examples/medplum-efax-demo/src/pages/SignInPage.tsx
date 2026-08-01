@@ -1,0 +1,26 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import { Title } from '@mantine/core';
+import { Logo, SignInForm } from '@medplum/react';
+import type { JSX } from 'react';
+import { useNavigate } from 'react-router';
+
+/**
+ * SignInPage component for the eFax demo.
+ * Displays a sign-in form with Google OAuth credentials.
+ *
+ * @returns The sign-in page
+ */
+export function SignInPage(): JSX.Element {
+  const navigate = useNavigate();
+  return (
+    <SignInForm
+      googleClientId={import.meta.env.GOOGLE_CLIENT_ID}
+      clientId={import.meta.env.MEDPLUM_CLIENT_ID}
+      onSuccess={() => navigate('/')}
+    >
+      <Logo size={32} />
+      <Title>Sign in to eFax Demo</Title>
+    </SignInForm>
+  );
+}

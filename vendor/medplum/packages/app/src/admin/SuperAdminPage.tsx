@@ -1,0 +1,648 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import {
+  Button,
+  Checkbox,
+  Code,
+  Divider,
+  Grid,
+  Group,
+  InputWrapper,
+  Modal,
+  NativeSelect,
+  NumberInput,
+  Stack,
+  Text,
+  TextInput,
+  Title,
+} from '@mantine/core';
+import { useDisclosure } from '@mantine/hooks';
+import { showNotification } from '@mantine/notifications';
+import { createReference, forbidden, getReferenceString, normalizeErrorString, resolveId } from '@medplum/core';
+import type { Parameters, Patient, Practitioner, Project, ProjectMembership, Reference } from '@medplum/fhirtypes';
+import {
+  convertLocalToIso,
+  DateTimeInput,
+  Document,
+  Form,
+  FormSection,
+  OperationOutcomeAlert,
+  PasswordInput,
+  ReferenceDisplay,
+  ReferenceInput,
+  useMedplum,
+} from '@medplum/react';
+import type { JSX, ReactNode } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { RescopeUserWidget } from './RescopeUserWidget';
+import { startAsyncJob } from './SuperAdminStartAsyncJob';
+import { WsSubStatsWidget } from './WsSubStatsWidget';
+
+export function SuperAdminPage(): JSX.Element {
+  const medplum = useMedplum();
+  const [opened, { open, close }] = useDisclosure(false);
+  const [modalTitle, setModalTitle] = useState('');
+  const [modalContent, setModalContent] = useState<ReactNode | undefined>();
+  const [clearWsSubsProject, setClearWsSubsProject] = useState<Reference<Project> | undefined>();
+
+  if (!medplum.isLoading() && !medplum.isSuperAdmin()) {
+    return <OperationOutcomeAlert outcome={forbidden} />;
+  }
+
+  function rebuildStructureDefinitions(): void {
+    startAsyncJob(medplum, 'Rebuilding Structure Definitions', 'admin/super/structuredefinitions');
+  }
+
+  function rebuildSearchParameters(): void {
+    startAsyncJob(medplum, 'Rebuilding Search Parameters', 'admin/super/searchparameters');
+  }
+
+  function rebuildValueSets(): void {
+    startAsyncJob(medplum, 'Rebuilding Value Sets', 'admin/super/valuesets');
+  }
+
+  function reindexResourceType(formData: Record<string, string>): void {
+    startAsyncJob(medplum, 'Reindexing Resources', 'admin/super/reindex', formData);
+  }
+
+  function reloadCron(): void {
+    startAsyncJob(medplum, 'Reload Cron Resources', 'admin/super/reloadcron');
+  }
+
+  function executeClearAllWsSubs(): void {
+    close();
+    const projectId = resolveId(clearWsSubsProject);
+    medplum
+      .post(
+        'fhir/R4/$clear-all-ws-subs',
+        projectId
+          ? { resourceType: 'Parameters', parameter: [{ name: 'projectId', valueString: projectId }] }
+          : undefined
+      )
+      .then(() => showNotification({ color: 'green', message: 'Done' }))
+      .catch((err) => showNotification({ color: 'red', message: normalizeErrorString(err), autoClose: false }));
+    setClearWsSubsProject(undefined);
+  }
+
+  function removeBotIdJobsFromQueue(formData: Record<string, string>): void {
+    medplum
+      .post('admin/super/removebotidjobsfromqueue', formData)
+      .then(() => showNotification({ color: 'green', message: 'Done' }))
+      .catch((err) => showNotification({ color: 'red', message: normalizeErrorString(err), autoClose: false }));
+  }
+
+  function purgeResources(formData: Record<string, string>): void {
+    medplum
+      .post('admin/super/purge', { ...formData, before: convertLocalToIso(formData.before) })
+      .then(() => showNotification({ color: 'green', message: 'Done' }))
+      .catch((err) => showNotification({ color: 'red', message: normalizeErrorString(err), autoClose: false }));
+  }
+
+  function forceSetPassword(formData: Record<string, string>): void {
+    medplum
+      .post('admin/super/setpassword', formData)
+      .then(() => showNotification({ color: 'green', message: 'Done' }))
+      .catch((err) => showNotification({ color: 'red', message: normalizeErrorString(err), autoClose: false }));
+  }
+
+  function getDatabaseStats(formData: Record<string, string>): void {
+    medplum
+      .post<Parameters>(
+        'fhir/R4/$db-stats',
+        formData.tableNames
+          ? {
+              resourceType: 'Parameters',
+              parameter: [{ name: 'tableNames', valueString: formData.tableNames }],
+            }
+          : undefined
+      )
+      .then((params) => {
+        setModalTitle('Database Stats');
+        setModalContent(<pre>{params.parameter?.find((p) => p.name === 'tableString')?.valueString}</pre>);
+        open();
+      })
+      .catch((err) => showNotification({ color: 'red', message: normalizeErrorString(err), autoClose: false }));
+  }
+
+  function getDatabaseInvalidIndexes(): void {
+    medplum
+      .post<Parameters>('fhir/R4/$db-invalid-indexes')
+      .then((params) => {
+        setModalTitle('Database Invalid Indexes');
+        setModalContent(
+          <pre>
+            {params.parameter
+              ?.filter((p) => p.name === 'invalidIndex')
+              .map((p) => p.valueString)
+              .join('\n')}
+          </pre>
+        );
+        open();
+      })
+      .catch((err) => showNotification({ color: 'red', message: normalizeErrorString(err), autoClose: false }));
+  }
+
+  function getSchemaDiff(): void {
+    medplum
+      .post<Parameters>('fhir/R4/$db-schema-diff')
+      .then((params) => {
+        setModalTitle('Schema Diff');
+        setModalContent(<pre>{params.parameter?.find((p) => p.name === 'migrationString')?.valueString}</pre>);
+        open();
+      })
+      .catch((err) => showNotification({ color: 'red', message: normalizeErrorString(err), autoClose: false }));
+  }
+
+  function reconcileSchemaDiff(): void {
+    startAsyncJob(medplum, 'Reconcile Schema Diff', 'admin/super/reconcile-db-schema-drift');
+  }
+
+  return (
+    <Document width={600}>
+      <Title order={1}>Super Admin</Title>
+      <Divider my="lg" />
+      <Title order={2}>Structure Definitions</Title>
+      <p>
+        StructureDefinition resources contain the metadata about resource types. They are provided with the FHIR
+        specification. Medplum also includes some custom StructureDefinition resources for internal data types. Press
+        this button to update the database StructureDefinitions from the FHIR specification.
+      </p>
+      <Form>
+        <Button onClick={rebuildStructureDefinitions}>Rebuild StructureDefinitions</Button>
+      </Form>
+      <Divider my="lg" />
+      <Title order={2}>Search Parameters</Title>
+      <p>
+        SearchParameter resources contain the metadata about filters and sorting. They are provided with the FHIR
+        specification. Medplum also includes some custom SearchParameter resources for internal data types. Press this
+        button to update the database SearchParameters from the FHIR specification.
+      </p>
+      <Form>
+        <Button onClick={rebuildSearchParameters}>Rebuild SearchParameters</Button>
+      </Form>
+      <Divider my="lg" />
+      <Title order={2}>Value Sets</Title>
+      <p>
+        ValueSet resources enum values for a wide variety of use cases. Press this button to update the database
+        ValueSets from the FHIR specification.
+      </p>
+      <Form>
+        <Button onClick={rebuildValueSets}>Rebuild ValueSets</Button>
+      </Form>
+      <Divider my="lg" />
+      <Title order={2}>Reindex Resources</Title>
+      <p>
+        When Medplum changes how resources are indexed, the system may require a reindex for old resources to be indexed
+        properly.
+      </p>
+      <ReindexForm onSubmit={reindexResourceType} />
+      <Divider my="lg" />
+      <Title order={2}>Purge Resources</Title>
+      <p>As system generated resources accumulate, the system may require a purge to remove old resources.</p>
+      <Form onSubmit={purgeResources}>
+        <Stack>
+          <FormSection title="Purge Resource Type" htmlFor="purgeResourceType">
+            <NativeSelect id="purgeResourceType" name="resourceType" data={['', 'AuditEvent', 'Login']} />
+          </FormSection>
+          <FormSection title="Purge Before" htmlFor="before">
+            <DateTimeInput name="before" placeholder="Before Date" />
+          </FormSection>
+          <Button type="submit">Purge</Button>
+        </Stack>
+      </Form>
+      <Divider my="lg" />
+      <Title order={2}>Remove Bot ID Jobs from Queue</Title>
+      <p>Remove all queued jobs for a Bot ID</p>
+      <Form onSubmit={removeBotIdJobsFromQueue}>
+        <Stack>
+          <FormSection title="Bot ID">
+            <TextInput name="botId" placeholder="Bot Id" />
+          </FormSection>
+          <Button type="submit">Remove Jobs by Bot ID</Button>
+        </Stack>
+      </Form>
+      <Divider my="lg" />
+      <Title order={2}>Force Set Password</Title>
+      <p>
+        Note that this applies to all projects for the user. Therefore, this should only be used in extreme
+        circumstances. Always prefer to use the "Forgot Password" flow first.
+      </p>
+      <Form onSubmit={forceSetPassword}>
+        <Stack>
+          <TextInput name="email" label="Email" required />
+          <PasswordInput name="password" label="Password" required />
+          <TextInput name="projectId" label="Project ID" />
+          <Button type="submit">Force Set Password</Button>
+        </Stack>
+      </Form>
+      <Divider my="lg" />
+      <Title order={2}>Database Stats</Title>
+      <p>Query current table statistics from the database.</p>
+      <Form onSubmit={getDatabaseStats}>
+        <Stack>
+          <FormSection title="Table Names (comma-delimited)" htmlFor="tableNames">
+            <TextInput id="tableNames" name="tableNames" placeholder="Observation,Observation_History" />
+          </FormSection>
+          <Button type="submit">Get Database Stats</Button>
+        </Stack>
+      </Form>
+      <Divider my="lg" />
+      <Title order={2}>Database Invalid Indexes</Title>
+      <p>Query invalid indexes from the database.</p>
+      <Form onSubmit={getDatabaseInvalidIndexes}>
+        <Stack>
+          <Button type="submit">Get Database Invalid Indexes</Button>
+        </Stack>
+      </Form>
+      <Divider my="lg" />
+      <Title order={2}>Database Schema Drift</Title>
+      <p>Show the schema migration needed to match the expected database schema.</p>
+      <Grid>
+        <Grid.Col span={6}>
+          <Form onSubmit={getSchemaDiff}>
+            <Stack>
+              <Button type="submit">Get Schema Drift</Button>
+            </Stack>
+          </Form>
+        </Grid.Col>
+        <Grid.Col span={6}>
+          <Form onSubmit={reconcileSchemaDiff}>
+            <Stack>
+              <Button type="submit">Reconcile Schema Drift</Button>
+            </Stack>
+          </Form>
+        </Grid.Col>
+      </Grid>
+      <Divider my="lg" />
+      <Title order={2}>Reload Cron Resources</Title>
+      <p>Obliterates the cron queue and rebuilds all the cron job schedulers for cron resources (eg. cron bots).</p>
+      <Form onSubmit={reloadCron}>
+        <Stack>
+          <Button type="submit">Reload Cron Resources</Button>
+        </Stack>
+      </Form>
+      <Divider my="lg" />
+      <Title order={2}>Database Explain Search</Title>
+      <p>Runs an EXPLAIN query on the database to show the query plan for a search.</p>
+      <ExplainSearchForm setModalTitle={setModalTitle} setModalContent={setModalContent} openModal={open} />
+      <Divider my="lg" />
+      <Title order={2}>WebSocket Subscription Stats</Title>
+      <p>View active WebSocket subscription statistics by project, resource type, and criteria.</p>
+      <WsSubStatsWidget />
+      <Divider my="lg" />
+      <Title order={2}>Clear All WebSocket Subscriptions</Title>
+      <p>
+        Removes all active WebSocket subscription records from Redis. This is useful for cleaning up stale subscriptions
+        during maintenance or after a deployment issue. Connected clients will need to re-bind.
+      </p>
+      <Stack>
+        <FormSection title="Project (optional)" htmlFor="clearWsSubsProject">
+          <ReferenceInput<Project>
+            name="clearWsSubsProject"
+            placeholder="All projects"
+            targetTypes={['Project']}
+            onChange={setClearWsSubsProject}
+          />
+        </FormSection>
+        <div>
+          <Button
+            onClick={() => {
+              setModalTitle('Clear All WebSocket Subscriptions');
+              setModalContent(
+                <Stack>
+                  <Text>
+                    Are you sure you want to completely clear{' '}
+                    <strong>
+                      {clearWsSubsProject
+                        ? `WebSocket subscriptions for "${clearWsSubsProject.display ?? clearWsSubsProject.reference}"`
+                        : 'ALL WebSocket subscriptions'}
+                    </strong>
+                    ? Connected clients will need to re-bind their subscriptions.
+                  </Text>
+                  <Group align="center">
+                    <Button color="red" onClick={executeClearAllWsSubs}>
+                      Clear
+                    </Button>
+                  </Group>
+                </Stack>
+              );
+              open();
+            }}
+          >
+            Clear All WebSocket Subscriptions
+          </Button>
+        </div>
+      </Stack>
+      <Modal opened={opened} onClose={close} title={modalTitle} centered size="auto">
+        {modalContent}
+      </Modal>
+      <Divider my="lg" />
+      <RescopeUserWidget />
+    </Document>
+  );
+}
+
+function MaxResourceVersionInput(): JSX.Element {
+  const [value, setValue] = useState<'outdated' | 'all' | 'specific'>('outdated');
+  return (
+    <>
+      <NativeSelect
+        id="reindexType"
+        name="reindexType"
+        value={value}
+        onChange={(e) => setValue(e.target.value as 'outdated' | 'all' | 'specific')}
+        data={[
+          { label: 'Outdated resources', value: 'outdated' },
+          { label: 'All resources', value: 'all' },
+          { label: 'Less than or equal to a specific version', value: 'specific' },
+        ]}
+      />
+      {value === 'specific' && (
+        <NumberInput required name="maxResourceVersion" placeholder="Max Resource Version" min={0} />
+      )}
+    </>
+  );
+}
+
+function ReindexForm({ onSubmit }: { readonly onSubmit: (formData: Record<string, string>) => void }): JSX.Element {
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  function handleSubmit(formData: Record<string, string>): void {
+    const cleanedData: Record<string, string> = {};
+    for (const [key, value] of Object.entries(formData)) {
+      if (value !== '') {
+        cleanedData[key] = value;
+      }
+    }
+    onSubmit(cleanedData);
+  }
+
+  return (
+    <Form onSubmit={handleSubmit}>
+      <Stack>
+        <FormSection title="Resource Type" htmlFor="resourceType">
+          <TextInput id="resourceType" name="resourceType" placeholder="Reindex Resource Type" />
+        </FormSection>
+        <FormSection title="Search Filter" htmlFor="filter">
+          <TextInput id="filter" name="filter" placeholder="e.g. name=Sam&birthdate=lt2000-01-01" />
+        </FormSection>
+        <FormSection title="Max Resource Version" htmlFor="maxResourceVersion">
+          <MaxResourceVersionInput />
+        </FormSection>
+
+        <Button variant="subtle" size="xs" onClick={() => setShowAdvanced(!showAdvanced)}>
+          {showAdvanced ? 'Hide Advanced Options' : 'Show Advanced Options'}
+        </Button>
+
+        {showAdvanced && (
+          <Stack gap="sm">
+            <Grid>
+              <Grid.Col span={6}>
+                <NumberInput
+                  name="batchSize"
+                  label="Resources per batch"
+                  description={<span>default: 500</span>}
+                  placeholder="500"
+                  min={20}
+                  max={1000}
+                />
+              </Grid.Col>
+              <Grid.Col span={6}>
+                <NumberInput
+                  name="searchStatementTimeout"
+                  label="Search query timeout (ms)"
+                  description={<span>default: 3,600,000 (1 hour)</span>}
+                  placeholder="3600000"
+                  min={1000}
+                />
+              </Grid.Col>
+              <Grid.Col span={6}>
+                <NumberInput
+                  name="upsertStatementTimeout"
+                  label="Upsert query timeout (ms)"
+                  description={<span>default: server `database.queryTimeout`</span>}
+                  placeholder="database.queryTimeout"
+                  min={1000}
+                />
+              </Grid.Col>
+              <Grid.Col span={6}>
+                <NumberInput
+                  name="delayBetweenBatches"
+                  label="Delay between batches (ms)"
+                  description={<span>default: 0</span>}
+                  placeholder="0"
+                  min={0}
+                  max={60000}
+                />
+              </Grid.Col>
+              <Grid.Col span={6}>
+                <NumberInput
+                  name="progressLogThreshold"
+                  label="Log progress every N resources"
+                  description={<span>default: 50,000</span>}
+                  placeholder="50000"
+                  min={1}
+                />
+              </Grid.Col>
+              <Grid.Col span={6}>
+                <NumberInput
+                  name="endTimestampBufferMinutes"
+                  label="End timestamp buffer (minutes)"
+                  description={<span>default: 5</span>}
+                  placeholder="5"
+                  min={1}
+                />
+              </Grid.Col>
+              <Grid.Col span={6}>
+                <NumberInput
+                  name="maxIterationAttempts"
+                  label="Max iteration attempts"
+                  description={<span>default: 3</span>}
+                  placeholder="3"
+                  min={1}
+                  max={20}
+                />
+              </Grid.Col>
+            </Grid>
+          </Stack>
+        )}
+
+        <Button type="submit">Reindex</Button>
+      </Stack>
+    </Form>
+  );
+}
+
+export function ExplainSearchForm({
+  setModalTitle,
+  setModalContent,
+  openModal,
+}: {
+  setModalTitle: (title: string) => void;
+  setModalContent: (content: ReactNode) => void;
+  openModal: () => void;
+}): JSX.Element {
+  const medplum = useMedplum();
+  const [explainProject, setExplainProject] = useState<Reference<Project> | undefined>();
+  const [explainProfile, setExplainProfile] = useState<Reference<Practitioner | Patient> | undefined>();
+  const [explainMemberships, setExplainMemberships] = useState<ProjectMembership[] | undefined>();
+  const [onBehalfOfProjectMembership, setOnBehalfOfProjectMembership] = useState<
+    Reference<ProjectMembership> | undefined
+  >();
+
+  const explainProfileSearchCriteria: Record<string, string> | undefined = useMemo(() => {
+    if (!explainProject?.reference) {
+      return undefined;
+    }
+
+    return { '_has:ProjectMembership:profile:project': explainProject.reference };
+  }, [explainProject]);
+
+  useEffect(() => {
+    setOnBehalfOfProjectMembership(undefined);
+
+    if (!explainProfile?.reference && !explainProject?.reference) {
+      setExplainMemberships(undefined);
+      return;
+    }
+
+    medplum
+      .searchResources('ProjectMembership', {
+        profile: explainProfile?.reference,
+        project: explainProject?.reference,
+        _count: 20,
+      })
+      .then((memberships) => {
+        setExplainMemberships(memberships);
+        if (memberships.length === 1) {
+          setOnBehalfOfProjectMembership(createReference(memberships[0]));
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+        showNotification({ color: 'red', message: normalizeErrorString(err), autoClose: false });
+      });
+  }, [medplum, explainProfile, explainProject]);
+
+  const searchCriteria = useMemo(() => {
+    const criteria: Record<string, string> = {};
+    if (explainProfile?.reference) {
+      criteria['profile'] = explainProfile?.reference;
+    }
+    if (explainProject?.reference) {
+      criteria['project'] = explainProject?.reference;
+    }
+
+    return criteria;
+  }, [explainProfile, explainProject]);
+
+  function explainSearch(formData: Record<string, any>): void {
+    if (!formData.query) {
+      showNotification({ color: 'red', message: 'Query is required', autoClose: false });
+      return;
+    }
+    const onBehalfOfHeader: string | undefined = formData['onBehalfOfProjectMembership'];
+    delete formData['onBehalfOfProjectMembership'];
+
+    const toSubmit = {
+      query: formData.query,
+      analyze: formData.analyze === 'on',
+      count: formData.count === 'on',
+      format: 'text',
+    };
+
+    const headers: HeadersInit = {};
+    if (onBehalfOfHeader) {
+      headers['x-medplum-on-behalf-of'] = onBehalfOfHeader;
+    }
+
+    medplum
+      .post<Parameters>('fhir/R4/$explain', toSubmit, undefined, { headers })
+      .then((params) => {
+        setModalTitle('Database Explain');
+        const explainLine = params.parameter?.find((p) => p.name === 'explain')?.valueString;
+        const queryLine = params.parameter?.find((p) => p.name === 'query')?.valueString;
+        const parametersLine = params.parameter?.find((p) => p.name === 'parameters')?.valueString;
+        const countEstimate = params.parameter?.find((p) => p.name === 'countEstimate')?.valueInteger?.toLocaleString();
+        const countAccurate = params.parameter?.find((p) => p.name === 'countAccurate')?.valueInteger?.toLocaleString();
+        const lines = [queryLine, parametersLine, '\n', explainLine].join('\n');
+        setModalContent(
+          <Stack>
+            <div>
+              <Text fw={700}>Query</Text>
+              <Code block maw={'100%'} style={{ whiteSpace: 'pre-wrap' }}>
+                {lines}
+              </Code>
+            </div>
+            {(countEstimate || countAccurate) && (
+              <div>
+                <Text fw={700}>Counts</Text>
+                {countEstimate && <Text>Estimate: {countEstimate}</Text>}
+                {countAccurate && <Text>Accurate: {countAccurate}</Text>}
+              </div>
+            )}
+          </Stack>
+        );
+        openModal();
+      })
+      .catch((err) => {
+        showNotification({ color: 'red', message: normalizeErrorString(err), autoClose: false });
+      });
+  }
+
+  if (!medplum.isLoading() && !medplum.isSuperAdmin()) {
+    return <OperationOutcomeAlert outcome={forbidden} />;
+  }
+  return (
+    <Form onSubmit={explainSearch}>
+      <Stack>
+        <TextInput name="query" label="Search" required placeholder="Observation?code=85354-9&_sort=-date&_count=5" />
+        <Group>
+          <Checkbox name="analyze" label="Analyze" />
+          <Checkbox name="count" label="Total count" />
+        </Group>
+        <InputWrapper label="On Behalf Of">
+          <Stack gap="sm">
+            <ReferenceInput<Project>
+              required
+              placeholder="Project"
+              targetTypes={['Project']}
+              name="onBehalfOfProject"
+              onChange={setExplainProject}
+            />
+            <ReferenceInput<Practitioner | Patient>
+              required
+              placeholder="Practitioner or Patient"
+              name="onBehalfOfProfile"
+              targetTypes={['Practitioner', 'Patient']}
+              onChange={setExplainProfile}
+              searchCriteria={explainProfileSearchCriteria}
+            />
+            {explainMemberships?.length !== 1 && (
+              <ReferenceInput<ProjectMembership>
+                required
+                placeholder="ProjectMembership"
+                name="onBehalfOfProjectMembership"
+                targetTypes={['ProjectMembership']}
+                onChange={setOnBehalfOfProjectMembership}
+                searchCriteria={searchCriteria}
+              />
+            )}
+            {explainMemberships?.length === 1 && (
+              <>
+                <input
+                  type="hidden"
+                  name="onBehalfOfProjectMembership"
+                  value={getReferenceString(explainMemberships[0])}
+                />
+                <ReferenceDisplay value={createReference(explainMemberships[0])} />
+              </>
+            )}
+            {!onBehalfOfProjectMembership && <Text fs="italic">On Behalf Of not set. Running as super admin</Text>}
+          </Stack>
+        </InputWrapper>
+        <Button type="submit">Explain Search</Button>
+      </Stack>
+    </Form>
+  );
+}

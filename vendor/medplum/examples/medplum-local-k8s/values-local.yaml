@@ -1,0 +1,55 @@
+# Medplum configuration for Docker Desktop Kubernetes
+global:
+  storageClass: 'hostpath'
+  cloudProvider: 'local'
+
+config:
+  server:
+    port: 8103
+    baseUrl: 'http://localhost:8103/'
+    appBaseUrl: 'http://localhost:3000/'
+    binaryStorage: 'file:./binary/'
+    storageBaseUrl: 'http://localhost:8103/storage/'
+    signingKeyId: ''
+    signingKey: ''
+    signingKeyPassphrase: ''
+    supportEmail: '"Medplum" <support@medplum.com>'
+    googleClientId: '397236612778-c0b5tnjv98frbo1tfuuha5vkme3cmq4s.apps.googleusercontent.com'
+    googleClientSecret: ''
+    recaptchaSiteKey: '6LfHdsYdAAAAAC0uLnnRrDrhcXnziiUwKd8VtLNq'
+    recaptchaSecretKey: '6LfHdsYdAAAAAH9dN154jbJ3zpQife3xaiTvPChL'
+    vmContextBotsEnabled: true
+    defaultBotRuntimeVersion: 'vmcontext'
+    allowedOrigins: '*'
+    introspectionEnabled: true
+  database:
+    host: 'postgres' # Use "postgres" to refer to the kubernetes service
+    port: 5432
+    dbname: 'medplum'
+    username: 'medplum'
+    password: 'medplum'
+  redis:
+    host: 'redis' # Use "redis" to refer to the kubernetes service
+    port: 6379
+    password: 'medplum'
+  fission:
+    namespace: 'default'
+    routerHost: 'router.fission.svc.cluster.local'
+    routerPort: 80
+    environmentName: 'nodejs'
+    fieldManager: 'medplum-fission-example'
+
+serviceAccount:
+  annotations: {}
+
+deployment:
+  env: {}
+
+# Expose service automatically via LoadBalancer
+service:
+  type: LoadBalancer
+  port: 8103
+
+# Disable ingress for local development
+ingress:
+  deploy: false

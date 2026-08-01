@@ -1,0 +1,490 @@
+# Medplum Agent Installer Builder
+# For use with NSIS 3.0+
+# See: https://nsis.sourceforge.io/
+
+!define COMPANY_NAME             "Medplum"
+!define APP_NAME                 "Medplum Agent"
+!define BASE_SERVICE_NAME        "MedplumAgent"
+!define SERVICE_NAME             "${BASE_SERVICE_NAME}_$%MEDPLUM_VERSION%-$%MEDPLUM_GIT_SHORTHASH%"
+!define SERVICE_DESCRIPTION      "Securely connects local devices to ${COMPANY_NAME} cloud"
+!define SERVICE_FILE_NAME        "medplum-agent-$%MEDPLUM_VERSION%-$%MEDPLUM_GIT_SHORTHASH%-win64.exe"
+!define INSTALLER_FILE_NAME      "medplum-agent-installer-$%MEDPLUM_VERSION%-$%MEDPLUM_GIT_SHORTHASH%.exe"
+!define PRODUCT_VERSION          "$%MEDPLUM_VERSION%.0"
+!define DEFAULT_BASE_URL         "https://api.medplum.com/"
+!define SHAWL_VERSION            "$%SHAWL_VERSION%"
+!define SHAWL_EXE_NAME           "shawl-${SHAWL_VERSION}-$%MEDPLUM_GIT_SHORTHASH%-win64.exe"
+
+Name                             "${APP_NAME}"
+OutFile                          "${INSTALLER_FILE_NAME}"
+VIProductVersion                 "${PRODUCT_VERSION}"
+VIAddVersionKey ProductName      "${APP_NAME}"
+VIAddVersionKey Comments         "${APP_NAME}"
+VIAddVersionKey CompanyName      "${COMPANY_NAME}"
+VIAddVersionKey LegalCopyright   "${COMPANY_NAME}"
+VIAddVersionKey FileDescription  "${APP_NAME}"
+VIAddVersionKey FileVersion      1
+VIAddVersionKey ProductVersion   1
+VIAddVersionKey InternalName     "${APP_NAME}"
+VIAddVersionKey LegalTrademarks  "${COMPANY_NAME}"
+VIAddVersionKey OriginalFilename "${INSTALLER_FILE_NAME}"
+
+InstallDir "$PROGRAMFILES64\${APP_NAME}"
+
+!include "nsDialogs.nsh"
+!include "x64.nsh"
+!include "LogicLib.nsh"
+
+RequestExecutionLevel admin
+
+Var WelcomeDialog
+Var WelcomeLabel
+Var alreadyInstalled
+Var alreadyInstalledThisVersion
+Var foundPropertiesFile
+Var baseUrl
+Var clientId
+Var clientSecret
+Var agentId
+
+# Vars for Section StopAndDeleteOldMedplumServices
+Var ServicesList
+Var WorkingList
+Var TempStr
+Var LineLen
+Var TempLen
+Var CurrentLen
+Var CurrentServiceName
+
+# The onInit handler is called when the installer is nearly finished initializing.
+# See: https://nsis.sourceforge.io/Reference/.onInit
+Function .onInit
+    ReadRegStr $0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\${BASE_SERVICE_NAME}" "DisplayName"
+    ${If} $0 != ""
+        StrCpy $alreadyInstalled 1
+    ${Else}
+        StrCpy $alreadyInstalled 0
+    ${EndIf}
+
+    ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Services\${SERVICE_NAME}" "ImagePath"
+    ${If} $0 != ""
+        StrCpy $alreadyInstalledThisVersion 1
+    ${Else}
+        StrCpy $alreadyInstalledThisVersion 0
+    ${EndIf}
+
+    ${If} ${FileExists} "$INSTDIR\agent.properties"
+        StrCpy $foundPropertiesFile 1
+    ${Else}
+        StrCpy $foundPropertiesFile 0
+    ${EndIf}
+
+    # Check if already installed and properties file not found
+    ${If} $alreadyInstalled == 1
+    ${AndIf} $foundPropertiesFile == 0
+        MessageBox MB_ICONSTOP "The currently installed version is too old and needs to be uninstalled manually before proceeding."
+        Quit
+    ${EndIf}
+FunctionEnd
+
+Page custom WelcomePage
+Page custom InputPage InputPageLeave
+Page instfiles
+
+# The WelcomePage is a simple static screen that displays a friendly message.
+Function WelcomePage
+    nsDialogs::Create 1018
+    Pop $WelcomeDialog
+
+    ${If} $WelcomeDialog == error
+        Abort
+    ${EndIf}
+
+    ${NSD_CreateLabel} 0 0 100% 50u "Welcome to the ${APP_NAME} Installer!$\r$\n$\r$\nClick next to continue."
+    Pop $WelcomeLabel
+
+    nsDialogs::Show
+FunctionEnd
+
+# The InputPage captures all of the user input for the agent.
+Function InputPage
+    ${If} $alreadyInstalled == 1
+        Abort ; This skips the page
+    ${EndIf}
+
+    nsDialogs::Create 1018
+    Pop $0
+
+    StrCpy $baseUrl "${DEFAULT_BASE_URL}"
+    ${NSD_CreateLabel} 0 0 30% 12u "Base URL:"
+    Pop $R0
+    ${NSD_CreateText} 35% 0 65% 12u $baseUrl
+    Pop $R1
+
+    ${NSD_CreateLabel} 0 15u 30% 12u "Client ID:"
+    Pop $R2
+    ${NSD_CreateText} 35% 15u 65% 12u $clientId
+    Pop $R3
+
+    ${NSD_CreateLabel} 0 30u 30% 12u "Client Secret:"
+    Pop $R4
+    ${NSD_CreateText} 35% 30u 65% 12u $clientSecret
+    Pop $R5
+
+    ${NSD_CreateLabel} 0 45u 30% 12u "Agent ID:"
+    Pop $R6
+    ${NSD_CreateText} 35% 45u 65% 12u $agentId
+    Pop $R7
+
+    ${NSD_SetFocus} $R3
+    nsDialogs::Show
+FunctionEnd
+
+Function InputPageLeave
+    ${NSD_GetText} $R1 $baseUrl
+    ${NSD_GetText} $R3 $clientId
+    ${NSD_GetText} $R5 $clientSecret
+    ${NSD_GetText} $R7 $agentId
+
+    StrCmp $baseUrl "" inputError
+    StrCmp $clientId "" inputError
+    StrCmp $clientSecret "" inputError
+    StrCmp $agentId "" inputError
+    Goto inputOK
+    inputError:
+        MessageBox MB_OK|MB_ICONEXCLAMATION "Please fill in all required fields."
+        Abort
+    inputOK:
+FunctionEnd
+
+# Main installation entry point.
+Section
+    DetailPrint "${APP_NAME}"
+    SetOutPath "$INSTDIR"
+
+    ${If} $alreadyInstalledThisVersion == 1
+        DetailPrint "This version is already installed on this system."
+        Abort
+    ${ElseIf} $alreadyInstalled == 1
+        Call UpgradeApp
+    ${Else}
+        Call InstallApp
+    ${EndIf}
+
+SectionEnd
+
+# Upgrade an existing installation.
+# This only copies files, and restarts the Windows Service.
+# It does not modify the existing configuration settings.
+Function UpgradeApp
+    # Copy the new files to the installation directory
+    # We temporarily set overwrite to "ifdiff" so that we don't try to overwrite files that may already exist from a previous installation
+    # This should prevent us from trying to overwrite shawl which could still be running, but shouldn't be different if it's the same version
+    SetOverwrite ifdiff
+    File dist\shawl-${SHAWL_VERSION}-legal.txt
+    File dist\${SHAWL_EXE_NAME}
+    File dist\${SERVICE_FILE_NAME}
+    File README.md
+    # We set overwrite back to the default value, "on"
+    SetOverwrite on
+
+    # Create the service
+    DetailPrint "Creating service..."
+    ExecWait "${SHAWL_EXE_NAME} add --name $\"${SERVICE_NAME}$\" --log-as $\"${SERVICE_NAME}$\" --cwd $\"$INSTDIR$\" -- $\"$INSTDIR\${SERVICE_FILE_NAME}$\"" $1
+    DetailPrint "Exit code $1"
+
+    # Set service display name
+    DetailPrint "Setting service display name..."
+    ExecWait "sc.exe config $\"${SERVICE_NAME}$\" displayname= $\"${APP_NAME}$\"" $1
+    DetailPrint "Exit code $1"
+
+    # Set service description
+    DetailPrint "Setting service description..."
+    ExecWait "sc.exe description $\"${SERVICE_NAME}$\" $\"${SERVICE_DESCRIPTION}$\"" $1
+    DetailPrint "Exit code $1"
+
+    # Set service to start automatically
+    DetailPrint "Setting service to start automatically..."
+    ExecWait "sc.exe config $\"${SERVICE_NAME}$\" start= auto" $1
+    DetailPrint "Exit code $1"
+
+    # Set service to restart on failure
+    DetailPrint "Setting service to restart on failure..."
+    ExecWait "sc.exe failure $\"${SERVICE_NAME}$\" reset= 0 actions= restart/0/restart/0/restart/0"
+    DetailPrint "Exit code $1"
+
+    # Check if there is an upgrade manifest already, if not, add one without a callback
+    # This is to activate the "maybeFinalizeUpgrade" path in the agent, which will make sure we delete the upgrade manifest
+    # Which we use as a signal to continue after the agent has either bound or started its loop to attempt to bind to all the server ports
+    ${If} ${FileExists} "$INSTDIR\upgrade.json"
+        DetailPrint "upgrade.json already exists, skipping creation"
+    ${Else}
+        DetailPrint "Creating upgrade.json file"
+        # Create the file with JSON content
+        FileOpen $1 "$INSTDIR\upgrade.json" w
+        FileWrite $1 '{ "previousVersion": "UNKNOWN", "targetVersion": "$%MEDPLUM_VERSION%", "callback": null }'
+        FileClose $1
+    ${EndIf}
+
+    # Start the service
+    DetailPrint "Starting service..."
+    ExecWait "sc.exe start $\"${SERVICE_NAME}$\"" $1
+    DetailPrint "Exit code $1"
+
+    # Check if service attempting to bind to ports
+    # The agent should be attempting to bind to the ports, or already bound to ports if old service not running
+    ${Do}
+        ${If} ${FileExists} "$INSTDIR\upgrade.json"
+            DetailPrint "Waiting for upgrade.json to be removed..."
+            Sleep 500
+        ${Else}
+            DetailPrint "upgrade.json removed, continuing..."
+            ${Break}
+        ${EndIf}
+    ${Loop}
+
+    DetailPrint "Stopping and deleting old Medplum Agent services..."
+    ExecWait "$\"$INSTDIR\${SERVICE_FILE_NAME}$\" --remove-old-services" $1
+    DetailPrint "Exit code $1"
+
+    # Clean up old shawl executables
+    DetailPrint "Cleaning up old shawl executables..."
+    Call CleanupOldShawlExecutables
+
+    DetailPrint "Writing uninstaller for upgraded version..."
+    WriteUninstaller "$INSTDIR\uninstall.exe"
+FunctionEnd
+
+# Clean up old shawl executables from previous installations
+# This function finds and deletes all shawl-*.exe files except the current version
+Function CleanupOldShawlExecutables
+    Push $0  # File handle
+    Push $1  # File name
+
+    ClearErrors
+    FindFirst $0 $1 "$INSTDIR\shawl-*.exe"
+
+    ${DoWhile} $1 != ""
+        # Skip if this is the current shawl executable
+        ${If} $1 != "${SHAWL_EXE_NAME}"
+            DetailPrint "Deleting old shawl executable: $1"
+            Delete "$INSTDIR\$1"
+            ${If} ${Errors}
+                DetailPrint "Warning: Could not delete $1 (may be in use)"
+                ClearErrors
+            ${EndIf}
+        ${Else}
+            DetailPrint "Keeping current shawl executable: $1"
+        ${EndIf}
+
+        FindNext $0 $1
+    ${Loop}
+
+    FindClose $0
+
+    Pop $1
+    Pop $0
+FunctionEnd
+
+# Do the actual installation.
+# Install all of the files.
+# Install the Windows Service.
+Function InstallApp
+    # Show architecture
+    !if "${NSIS_PTR_SIZE}" >= 8
+      DetailPrint "64-bit installer"
+    !else
+      ${If} ${RunningX64}
+        DetailPrint "32-bit installer on a 64-bit OS"
+      ${Else}
+        DetailPrint "32-bit installer on a 32-bit OS"
+      ${EndIf}
+    !endif
+
+    # Print user input
+    DetailPrint "Base URL: $baseUrl"
+    DetailPrint "Client ID: $clientId"
+    DetailPrint "Client Secret: $clientSecret"
+    DetailPrint "Agent ID: $agentId"
+
+    # Copy the service files to the root directory
+    File dist\shawl-${SHAWL_VERSION}-legal.txt
+    File dist\${SHAWL_EXE_NAME}
+    File dist\${SERVICE_FILE_NAME}
+    File README.md
+
+    # Create the agent.properties config file
+    FileOpen $9 agent.properties w
+    FileWrite $9 "baseUrl=$baseUrl$\r$\n"
+    FileWrite $9 "clientId=$clientId$\r$\n"
+    FileWrite $9 "clientSecret=$clientSecret$\r$\n"
+    FileWrite $9 "agentId=$agentId$\r$\n"
+    FileClose $9
+
+    # Create the service
+    DetailPrint "Creating service..."
+    ExecWait "${SHAWL_EXE_NAME} add --name $\"${SERVICE_NAME}$\" --log-as $\"${SERVICE_NAME}$\" --cwd $\"$INSTDIR$\" -- $\"$INSTDIR\${SERVICE_FILE_NAME}$\"" $1
+    DetailPrint "Exit code $1"
+
+    # Set service display name
+    DetailPrint "Setting service display name..."
+    ExecWait "sc.exe config $\"${SERVICE_NAME}$\" displayname= $\"${APP_NAME}$\"" $1
+    DetailPrint "Exit code $1"
+
+    # Set service description
+    DetailPrint "Setting service description..."
+    ExecWait "sc.exe description $\"${SERVICE_NAME}$\" $\"${SERVICE_DESCRIPTION}$\"" $1
+    DetailPrint "Exit code $1"
+
+    # Set service to start automatically
+    DetailPrint "Setting service to start automatically..."
+    ExecWait "sc.exe config $\"${SERVICE_NAME}$\" start= auto" $1
+    DetailPrint "Exit code $1"
+
+    # Set service to restart on failure
+    DetailPrint "Setting service to restart on failure..."
+    ExecWait "sc.exe failure $\"${SERVICE_NAME}$\" reset= 0 actions= restart/0/restart/0/restart/0"
+    DetailPrint "Exit code $1"
+
+    # Start the service
+    DetailPrint "Starting service..."
+    ExecWait "sc.exe start $\"${SERVICE_NAME}$\"" $1
+    DetailPrint "Exit code $1"
+
+    # Create the uninstaller
+    DetailPrint "Creating the uninstaller..."
+    SetOutPath $INSTDIR
+    WriteUninstaller "$INSTDIR\uninstall.exe"
+
+    # Register the uninstaller
+    DetailPrint "Registering the uninstaller..."
+    WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\${BASE_SERVICE_NAME}" "DisplayName" "${APP_NAME}"
+    WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\${BASE_SERVICE_NAME}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
+    WriteRegStr HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\${BASE_SERVICE_NAME}" "QuietUninstallString" "$\"$INSTDIR\uninstall.exe$\" /S"
+    DetailPrint "Uninstaller complete"
+
+    # Create Start menu shortcuts
+    DetailPrint "$SMPROGRAMS\${APP_NAME}\${APP_NAME} Uninstall.lnk"
+    CreateDirectory "$SMPROGRAMS\${APP_NAME}"
+    CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME} Uninstall.lnk" "$INSTDIR\uninstall.exe"
+
+FunctionEnd
+
+# Determine whether a file should be preserved during uninstall (gh #3672):
+# a bare "*.log", or a numbered rotation "*.log.1" through "*.log.999".
+# All checks work off a fixed 8-char tail (wide enough for "*.log.999") so
+# cost is independent of the file name's overall length. The tiers are
+# ordered by expected frequency: a bare ".log" is checked first, then a
+# single-digit rotation, and only then do we exhaustively check the
+# remaining (less common) two- and three-digit rotations.
+#
+# Input:  $1 = file name (left unmodified)
+# Output: $2 = 1 if the file should be kept, 0 if it should be deleted
+Function un.IsLogFile
+    Push $3  # Loop counter for the numeric suffix (10..999)
+    Push $4  # Candidate suffix string, e.g. ".log.42"
+    Push $5  # Length of the candidate suffix
+    Push $6  # Last up to 8 characters of the file name
+    Push $7  # Tail of $6, sliced to the length being compared
+
+    StrCpy $2 0
+    StrCpy $6 $1 "" -8
+
+    StrCpy $7 $6 "" -4
+    ${If} $7 == ".log"
+        StrCpy $2 1
+    ${Else}
+        StrCpy $7 $6 "" -6
+        ${If} $7 == ".log.1"
+        ${OrIf} $7 == ".log.2"
+        ${OrIf} $7 == ".log.3"
+        ${OrIf} $7 == ".log.4"
+        ${OrIf} $7 == ".log.5"
+        ${OrIf} $7 == ".log.6"
+        ${OrIf} $7 == ".log.7"
+        ${OrIf} $7 == ".log.8"
+        ${OrIf} $7 == ".log.9"
+            StrCpy $2 1
+        ${Else}
+            StrCpy $3 10
+            ${DoWhile} $3 <= 999
+                StrCpy $4 ".log.$3"
+                StrLen $5 $4
+                StrCpy $7 $6 $5 -$5
+                ${If} $7 == $4
+                    StrCpy $2 1
+                    ${Break}
+                ${EndIf}
+                IntOp $3 $3 + 1
+            ${Loop}
+        ${EndIf}
+    ${EndIf}
+
+    Pop $7
+    Pop $6
+    Pop $5
+    Pop $4
+    Pop $3
+FunctionEnd
+
+# Start the uninstaller
+Section Uninstall
+    DetailPrint "Stopping and deleting all old Medplum Agent services..."
+    ExecWait "$\"$INSTDIR\${SERVICE_FILE_NAME}$\" --remove-old-services --all" $1
+    DetailPrint "Exit code $1"
+
+    # Get out of the service directory so we can delete it
+    SetOutPath "$PROGRAMFILES64"
+
+    # Uninstall the Start menu shortcuts
+    RMDir /r /REBOOTOK "$SMPROGRAMS\${APP_NAME}"
+
+    # Delete the files, but preserve any rotated log files (see un.IsLogFile)
+    Push $0  # File handle
+    Push $1  # File name
+    Push $2  # Keep flag (1 = keep, 0 = delete), set by un.IsLogFile
+
+    ClearErrors
+    FindFirst $0 $1 "$INSTDIR\*.*"
+
+    ${DoWhile} $1 != ""
+        # Skip the "." and ".." directory entries
+        ${If} $1 != "."
+        ${AndIf} $1 != ".."
+            Call un.IsLogFile
+            ${If} $2 == 1
+                DetailPrint "Keeping log file: $1"
+            ${Else}
+                Delete /REBOOTOK "$INSTDIR\$1"
+                ${If} ${Errors}
+                    DetailPrint "Warning: Could not delete $1 (may be in use)"
+                    ClearErrors
+                ${EndIf}
+            ${EndIf}
+        ${EndIf}
+
+        FindNext $0 $1
+    ${Loop}
+
+    FindClose $0
+
+    Pop $2
+    Pop $1
+    Pop $0
+
+    # Remove the install directory only if it is now empty
+    # (i.e. no log files were left behind)
+    RMDir "$INSTDIR"
+
+    # Unregister the program
+    DeleteRegKey HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\${BASE_SERVICE_NAME}"
+
+SectionEnd
+
+# Check if we should skip signing... this can be set via /D cli arg
+!ifndef SKIP_SIGNING
+    # Sign the installer and uninstaller
+    # Keep in mind that you must append = 0 at !finalize and !uninstfinalize.
+    # That will stop running both in parallel.
+    !finalize '"$%SIGNTOOL_PATH%" sign /v /debug /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib "$%AZURE_CODESIGNING_PATH%\Azure.CodeSigning.Dlib.dll" /dmdf "$%AZURE_CODESIGNING_PATH%\metadata.json" /as "%1"' = 0
+    !uninstfinalize '"$%SIGNTOOL_PATH%" sign /v /debug /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib "$%AZURE_CODESIGNING_PATH%\Azure.CodeSigning.Dlib.dll" /dmdf "$%AZURE_CODESIGNING_PATH%\metadata.json" /as "%1"' = 0
+!endif

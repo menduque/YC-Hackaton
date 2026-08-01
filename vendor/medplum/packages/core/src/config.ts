@@ -1,0 +1,364 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { TypeName } from './types';
+
+export const ExternalSecretSystems = {
+  aws_ssm_parameter_store: 'aws_ssm_parameter_store',
+} as const;
+
+export type ExternalSecretSystem = keyof typeof ExternalSecretSystems;
+export type ExternalSecretPrimitive = string | boolean | number;
+export type ExternalSecretPrimitiveType = 'string' | 'boolean' | 'number';
+export type ExternalSecret<T extends ExternalSecretPrimitive = ExternalSecretPrimitive> = {
+  system: ExternalSecretSystem;
+  key: string;
+  type: TypeName<T>;
+};
+export type ValueOrExternalSecret<T extends ExternalSecretPrimitive> = T | ExternalSecret<T>;
+export type StringMap = { [key: string]: string };
+
+export interface MedplumSourceInfraConfig {
+  name: ValueOrExternalSecret<string>;
+  stackName: ValueOrExternalSecret<string>;
+  accountNumber: ValueOrExternalSecret<string>;
+  region: string;
+  domainName: ValueOrExternalSecret<string>;
+  vpcId: ValueOrExternalSecret<string>;
+  apiPort: ValueOrExternalSecret<number>;
+  apiDomainName: ValueOrExternalSecret<string>;
+  apiSslCertArn: ValueOrExternalSecret<string>;
+  apiInternetFacing?: ValueOrExternalSecret<boolean>;
+  apiWafIpSetArn: ValueOrExternalSecret<string>;
+  appDomainName: ValueOrExternalSecret<string>;
+  appSslCertArn: ValueOrExternalSecret<string>;
+  appApiProxy?: ValueOrExternalSecret<boolean>;
+  appWafIpSetArn: ValueOrExternalSecret<string>;
+  appLoggingBucket?: ValueOrExternalSecret<string>;
+  appLoggingPrefix?: ValueOrExternalSecret<string>;
+  storageBucketName: ValueOrExternalSecret<string>;
+  storageDomainName: ValueOrExternalSecret<string>;
+  storageSslCertArn: ValueOrExternalSecret<string>;
+  mtlsDomainName?: ValueOrExternalSecret<string>;
+  mtlsSslCertArn?: ValueOrExternalSecret<string>;
+  mtlsInternetFacing?: ValueOrExternalSecret<boolean>;
+  mtlsWafIpSetArn?: ValueOrExternalSecret<string>;
+  signingKeyId: ValueOrExternalSecret<string>;
+  storagePublicKey: ValueOrExternalSecret<string>;
+  storageWafIpSetArn: ValueOrExternalSecret<string>;
+  storageLoggingBucket?: ValueOrExternalSecret<string>;
+  storageLoggingPrefix?: ValueOrExternalSecret<string>;
+  baseUrl: ValueOrExternalSecret<string>;
+  maxAzs: ValueOrExternalSecret<number>;
+  rdsInstances: ValueOrExternalSecret<number>;
+  rdsInstanceType: ValueOrExternalSecret<string>;
+  rdsInstanceVersion?: ValueOrExternalSecret<string>;
+  rdsSecretsArn?: ValueOrExternalSecret<string>;
+  rdsReaderInstanceType?: ValueOrExternalSecret<string>;
+  rdsProxyEnabled?: ValueOrExternalSecret<boolean>;
+  rdsClusterParameters?: StringMap;
+  rdsForceRetain?: ValueOrExternalSecret<boolean>;
+  rdsAutoMinorVersionUpgrade?: ValueOrExternalSecret<boolean>;
+  cacheNodeType?: ValueOrExternalSecret<string>;
+  cacheSecurityGroupId?: ValueOrExternalSecret<string>;
+  cacheEngine?: ValueOrExternalSecret<string>;
+  cacheEngineVersion?: ValueOrExternalSecret<string>;
+  cacheRedis?: {
+    nodeType?: ValueOrExternalSecret<string>;
+    securityGroupId?: ValueOrExternalSecret<string>;
+    engine?: ValueOrExternalSecret<string>;
+    engineVersion?: ValueOrExternalSecret<string>;
+  };
+  rateLimitRedis?: {
+    nodeType?: ValueOrExternalSecret<string>;
+    securityGroupId?: ValueOrExternalSecret<string>;
+    engine?: ValueOrExternalSecret<string>;
+    engineVersion?: ValueOrExternalSecret<string>;
+  };
+  pubSubRedis?: {
+    nodeType?: ValueOrExternalSecret<string>;
+    securityGroupId?: ValueOrExternalSecret<string>;
+    engine?: ValueOrExternalSecret<string>;
+    engineVersion?: ValueOrExternalSecret<string>;
+  };
+  backgroundJobsRedis?: {
+    nodeType?: ValueOrExternalSecret<string>;
+    securityGroupId?: ValueOrExternalSecret<string>;
+    engine?: ValueOrExternalSecret<string>;
+    engineVersion?: ValueOrExternalSecret<string>;
+  };
+  desiredServerCount: ValueOrExternalSecret<number>;
+  serverImage: ValueOrExternalSecret<string>;
+  serverMemory: ValueOrExternalSecret<number>;
+  serverCpu: ValueOrExternalSecret<number>;
+  loadBalancerSecurityGroupId?: ValueOrExternalSecret<string>;
+  loadBalancerLoggingBucket?: ValueOrExternalSecret<string>;
+  loadBalancerLoggingPrefix?: ValueOrExternalSecret<string>;
+  loadBalancerAlgorithm?: ValueOrExternalSecret<'round_robin' | 'least_outstanding_requests' | 'weighted_random'>;
+  guardDutyMalwareProtectionEnabled?: ValueOrExternalSecret<boolean>;
+  /** @deprecated Use guardDutyMalwareProtectionEnabled instead */
+  clamscanEnabled?: ValueOrExternalSecret<boolean>;
+  /** @deprecated Use guardDutyMalwareProtectionEnabled instead */
+  clamscanLoggingBucket?: ValueOrExternalSecret<string>;
+  /** @deprecated Use guardDutyMalwareProtectionEnabled instead */
+  clamscanLoggingPrefix?: ValueOrExternalSecret<string>;
+  skipDns?: ValueOrExternalSecret<boolean>;
+  hostedZoneName?: ValueOrExternalSecret<string>;
+  wafLogGroupName?: ValueOrExternalSecret<string>;
+  wafLogGroupCreate?: ValueOrExternalSecret<boolean>;
+  additionalContainers?: {
+    name: ValueOrExternalSecret<string>;
+    image: ValueOrExternalSecret<string>;
+    cpu?: ValueOrExternalSecret<number>;
+    memory?: ValueOrExternalSecret<number>;
+    essential?: ValueOrExternalSecret<boolean>;
+    command?: ValueOrExternalSecret<string>[];
+    environment?: {
+      [key: string]: ValueOrExternalSecret<string>;
+    };
+  }[];
+  containerRegistryCredentialsSecretArn?: ValueOrExternalSecret<string>;
+  containerInsightsV2?: ValueOrExternalSecret<'enabled' | 'disabled' | 'enhanced'>;
+  cloudTrailAlarms?: {
+    logGroupName: ValueOrExternalSecret<string>;
+    logGroupCreate?: ValueOrExternalSecret<boolean>;
+    snsTopicArn?: ValueOrExternalSecret<string>;
+    snsTopicName?: ValueOrExternalSecret<string>;
+  };
+  fargateAutoScaling?: {
+    minCapacity: ValueOrExternalSecret<number>;
+    maxCapacity: ValueOrExternalSecret<number>;
+    targetUtilizationPercent: ValueOrExternalSecret<number>;
+    scaleInCooldown: ValueOrExternalSecret<number>;
+    scaleOutCooldown: ValueOrExternalSecret<number>;
+  };
+  environment?: StringMap;
+  workers?: {
+    enabled?: string[];
+    bullmq?: Record<string, unknown>;
+  };
+  workerServices?: {
+    id: ValueOrExternalSecret<string>;
+    serverImage?: ValueOrExternalSecret<string>;
+    serverMemory?: ValueOrExternalSecret<number>;
+    serverCpu?: ValueOrExternalSecret<number>;
+    desiredCount: ValueOrExternalSecret<number>;
+    environment?: StringMap;
+    workers?: {
+      enabled?: string[];
+      bullmq?: Record<string, unknown>;
+    };
+    fargateAutoScaling?: {
+      minCapacity: ValueOrExternalSecret<number>;
+      maxCapacity: ValueOrExternalSecret<number>;
+      targetUtilizationPercent: ValueOrExternalSecret<number>;
+      scaleInCooldown: ValueOrExternalSecret<number>;
+      scaleOutCooldown: ValueOrExternalSecret<number>;
+    };
+    additionalContainers?: {
+      name: ValueOrExternalSecret<string>;
+      image: ValueOrExternalSecret<string>;
+      cpu?: ValueOrExternalSecret<number>;
+      memory?: ValueOrExternalSecret<number>;
+      essential?: ValueOrExternalSecret<boolean>;
+      command?: ValueOrExternalSecret<string>[];
+      environment?: {
+        [key: string]: ValueOrExternalSecret<string>;
+      };
+    }[];
+  }[];
+
+  rdsIdsMajorVersionSuffix?: ValueOrExternalSecret<boolean>;
+  rdsPersistentParameterGroups?: ValueOrExternalSecret<boolean>;
+
+  fireLens?: {
+    enabled: true;
+    logDriverConfig?: {
+      options?: {
+        [key: string]: ValueOrExternalSecret<string>;
+      };
+      secretOptions?: {
+        [key: string]: ValueOrExternalSecret<string>;
+      };
+    };
+    logRouterConfig: {
+      type: 'fluentbit' | 'fluentd';
+      options?: Record<string, unknown>;
+    };
+    environment?: {
+      [key: string]: ValueOrExternalSecret<string>;
+    };
+  };
+}
+
+export interface MedplumInfraConfig {
+  name: string;
+  stackName: string;
+  accountNumber: string;
+  region: string;
+  domainName: string;
+  vpcId: string;
+  apiPort: number;
+  apiDomainName: string;
+  apiSslCertArn: string;
+  apiInternetFacing?: boolean;
+  apiWafIpSetArn?: string;
+  appDomainName: string;
+  appSslCertArn: string;
+  appApiProxy?: boolean;
+  appWafIpSetArn?: string;
+  appLoggingBucket?: string;
+  appLoggingPrefix?: string;
+  storageBucketName: string;
+  storageDomainName: string;
+  storageSslCertArn: string;
+  signingKeyId: string;
+  storagePublicKey: string;
+  storageWafIpSetArn?: string;
+  storageLoggingBucket?: string;
+  storageLoggingPrefix?: string;
+  mtlsDomainName?: string;
+  mtlsSslCertArn?: string;
+  mtlsInternetFacing?: boolean;
+  mtlsWafIpSetArn?: string;
+  baseUrl: string;
+  maxAzs: number;
+  rdsInstances: number;
+  rdsInstanceType: string;
+  rdsInstanceVersion?: string;
+  rdsClusterParameters?: StringMap;
+  rdsAutoMinorVersionUpgrade?: boolean;
+  rdsSecretsArn?: string;
+  rdsReaderInstanceType?: string;
+  rdsProxyEnabled?: boolean;
+  rdsForceRetain?: boolean;
+  cacheNodeType?: string;
+  cacheSecurityGroupId?: string;
+  cacheEngine?: string;
+  cacheEngineVersion?: string;
+  cacheRedis?: {
+    nodeType?: string;
+    securityGroupId?: string;
+    engine?: string;
+    engineVersion?: string;
+  };
+  rateLimitRedis?: {
+    nodeType?: string;
+    securityGroupId?: string;
+    engine?: string;
+    engineVersion?: string;
+  };
+  pubSubRedis?: {
+    nodeType?: string;
+    securityGroupId?: string;
+    engine?: string;
+    engineVersion?: string;
+  };
+  backgroundJobsRedis?: {
+    nodeType?: string;
+    securityGroupId?: string;
+    engine?: string;
+    engineVersion?: string;
+  };
+  desiredServerCount: number;
+  serverImage: string;
+  serverMemory: number;
+  serverCpu: number;
+  loadBalancerSecurityGroupId?: string;
+  loadBalancerLoggingBucket?: string;
+  loadBalancerLoggingPrefix?: string;
+  loadBalancerAlgorithm?: 'round_robin' | 'least_outstanding_requests' | 'weighted_random';
+  guardDutyMalwareProtectionEnabled?: boolean;
+  /** @deprecated Use guardDutyMalwareProtectionEnabled instead */
+  clamscanEnabled: boolean;
+  /** @deprecated Use guardDutyMalwareProtectionEnabled instead */
+  clamscanLoggingBucket: string;
+  /** @deprecated Use guardDutyMalwareProtectionEnabled instead */
+  clamscanLoggingPrefix: string;
+  skipDns?: boolean;
+  hostedZoneName?: string;
+  wafLogGroupName?: string;
+  wafLogGroupCreate?: boolean;
+  additionalContainers?: {
+    name: string;
+    image: string;
+    cpu?: number;
+    memory?: number;
+    essential?: boolean;
+    command?: string[];
+    environment?: {
+      [key: string]: string;
+    };
+  }[];
+  containerRegistryCredentialsSecretArn?: string;
+  containerInsightsV2?: 'enabled' | 'disabled' | 'enhanced';
+  cloudTrailAlarms?: {
+    logGroupName: string;
+    logGroupCreate?: boolean;
+    snsTopicArn?: string;
+    snsTopicName?: string;
+  };
+  fargateAutoScaling?: {
+    minCapacity: number;
+    maxCapacity: number;
+    targetUtilizationPercent: number;
+    scaleInCooldown: number;
+    scaleOutCooldown: number;
+  };
+  environment?: StringMap;
+  workers?: {
+    enabled?: string[];
+    bullmq?: Record<string, unknown>;
+  };
+  workerServices?: {
+    id: string;
+    serverImage?: string;
+    serverMemory?: number;
+    serverCpu?: number;
+    desiredCount: number;
+    environment?: StringMap;
+    workers?: {
+      enabled?: string[];
+      bullmq?: Record<string, unknown>;
+    };
+    fargateAutoScaling?: {
+      minCapacity: number;
+      maxCapacity: number;
+      targetUtilizationPercent: number;
+      scaleInCooldown: number;
+      scaleOutCooldown: number;
+    };
+    additionalContainers?: {
+      name: string;
+      image: string;
+      cpu?: number;
+      memory?: number;
+      essential?: boolean;
+      command?: string[];
+      environment?: {
+        [key: string]: string;
+      };
+    }[];
+  }[];
+
+  rdsIdsMajorVersionSuffix?: boolean;
+  rdsPersistentParameterGroups?: boolean;
+
+  fireLens?: {
+    enabled: true;
+    logDriverConfig?: {
+      options?: {
+        [key: string]: string;
+      };
+      secretOptions?: {
+        [key: string]: string;
+      };
+    };
+    logRouterConfig: {
+      type: 'fluentbit' | 'fluentd';
+      options?: Record<string, unknown>;
+    };
+    environment?: {
+      [key: string]: string;
+    };
+  };
+}

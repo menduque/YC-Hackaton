@@ -1,4 +1,14 @@
-# Vendor setup — first steps (do these, bring back the values)
+# Vendor setup
+
+Status: **Deepgram, MedPlum, Stedi and Moss are all wired and verified.**
+Check any time with:
+
+```bash
+cd backend && npm run vendortest    # exercises every handler the agent calls
+```
+
+Every value lives in the **repo-root `.env`** (`backend/.env` also works and
+takes precedence). Sections below are kept for reference / re-provisioning.
 
 Everything you gather here goes into `backend/.env` (template: `backend/.env.example`).
 The backend boots without them and tells you what's still missing, so tackle them
@@ -20,41 +30,72 @@ Default to Voice Agent API unless you want more control.
 
 ---
 
-## 2. MedPlum — FHIR record
+## 2. MedPlum — FHIR record ✅ DONE
 
-1. https://app.medplum.com → sign in, create/confirm a **Project**.
-2. **Project Admin → Clients → New Client** (a `ClientApplication`) → copy
-   **Client ID** and **Client Secret**.
-3. Grab your **Project ID** (Project Admin → Details).
-4. Base URL is `https://api.medplum.com/` unless self-hosted.
-5. Before the demo: create one demo `Patient` with a `Condition` and a
-   `MedicationStatement` (warfarin) so "full context of your history" is real —
-   I can script this once the client creds are in.
+Project **test** (`71bf21cb-c741-4290-b2f0-fef2b53e121e`), and the backend
+authenticates with the project's auto-created **"test Default Client"**
+(Admin → Project → Clients). Medplum makes one per project — no need to create
+another. All four `MEDPLUM_*` values are in the repo-root `.env`.
 
-→ `MEDPLUM_BASE_URL=` `MEDPLUM_CLIENT_ID=` `MEDPLUM_CLIENT_SECRET=` `MEDPLUM_PROJECT_ID=`
+Wired in `backend/src/clients/medplum.ts`:
 
----
+- `getPatientContext(documento)` — searches `Patient` by identifier, pulls
+  `Condition` + active `MedicationRequest`, returns a speakable summary.
+- `writeAppointmentAndCommunication()` — writes the `Appointment` with status
+  **`proposed`** (never `booked` — the front desk still has to press Aceptar) plus
+  a `Communication` carrying the agent's clinical summary.
 
-## 3. Stedi — eligibility (270/271)
-
-1. https://www.stedi.com → sign in → **Healthcare / Eligibility**.
-2. Create a **sandbox/test API key**.
-3. Note a **test payer id** and its **expected response** (so the ELIGIBLE badge
-   is deterministic on stage). US-centric: "OSDE" is mapped to a test payer.
-
-→ `STEDI_API_KEY=` `STEDI_TEST_PAYER_ID=`
+Still to do before the demo: seed a demo `Patient` with `Condition` +
+`MedicationRequest` matching DNI 30111222, so `getPatientContext` returns
+history instead of "paciente nuevo". Moss already has that patient's narrative.
 
 ---
 
-## 4. Moss — RAG context / deep research
+## 3. Stedi — eligibility (270/271) ✅ DONE
 
-1. https://portal.usemoss.dev → sign in, create a **Project**.
-2. Copy **Project ID** and **Project Key**.
-3. Before the demo we must **index** something real: the demo patient's history +
-   a small medical KB (warfarin/anticoagulation notes). I'll write the indexer
-   once the keys are in.
+Account **Oido AI**, test-mode key in the repo-root `.env`. Test mode means
+synthetic patients, nothing reaching a real payer, and no charges; the client
+refuses to run with a key that isn't `test_`-prefixed.
 
-→ `MOSS_PROJECT_ID=` `MOSS_PROJECT_KEY=`
+All 34 of Stedi's documented mock requests are in
+`shared/stedi/mock-requests.ts`, each verified against the live test API.
+`backend/src/clients/stedi.ts` maps the payer the patient names onto one of them:
+
+| Spoken | Fixture | Result on stage |
+| --- | --- | --- |
+| OSDE | `aetna` | active, $25 consultation copay |
+| Swiss Medical | `cigna` | active |
+| Galeno | `unitedhealthcare` | active |
+| Omint | `humana` | active |
+| PAMI | `cms` | active |
+| Particular / ninguna | `unitedhealthcare-inactive` | **inactive** — good for showing the unhappy path |
+| anything else | `STEDI_TEST_PAYER_ID` (default `aetna`) | active |
+
+Deterministic by construction — same fixture, same answer, every time.
+
+→ `STEDI_API_KEY=` `STEDI_TEST_PAYER_ID=` (both set)
+
+---
+
+## 4. Moss — RAG context / deep research ✅ DONE
+
+Keys are in the repo-root `.env`, and the index is built:
+
+```bash
+cd backend && npm run moss:index
+```
+
+That seeds `oido-clinical` with a triage/scheduling KB (cefalea, chest pain →
+emergencias, fasting, pediatría, documentation, cancellations) plus a synthetic
+demo history for DNI 30111222. Re-run any time — it drops and rebuilds.
+
+`retrieve()` calls `loadIndex()` once and then queries locally in ~1 ms. That
+matters inside a live call, where a 300 ms retrieval is an audible pause.
+
+Note `@moss-dev/moss` ships native Node addons, not browser WASM — it only runs
+server-side.
+
+→ `MOSS_PROJECT_ID=` `MOSS_PROJECT_KEY=` (both set)
 
 ---
 

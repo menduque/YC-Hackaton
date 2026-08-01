@@ -1,0 +1,198 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { CrawlerVisitor, InternalTypeSchema, TypedValue, TypedValueWithPath } from '@medplum/core';
+import {
+  append,
+  badRequest,
+  crawlTypedValue,
+  crawlTypedValueAsync,
+  createReference,
+  createStructureIssue,
+  isResourceType,
+  normalizeErrorString,
+  OperationOutcomeError,
+  parseSearchRequest,
+  PropertyType,
+  toTypedValue,
+} from '@medplum/core';
+import type { OperationOutcomeIssue, Reference, Resource, ResourceType } from '@medplum/fhirtypes';
+import { randomUUID } from 'node:crypto';
+import type { Repository } from './repo';
+
+/**
+ * Exceptional, system-level references that should use systemRepo for validation
+ *
+ * Project.owner:
+ * `User` reference which typically does not have meta.compartment specified
+ * and is not technically in the project and thus would not be visible through
+ * the non-system repo.
+ *
+ * Project.link.project:
+ * The synthetic Project policy from `applyProjectAdminAccessPolicy` applies
+ * a criteria that requires Project.id matches the admin's ProjectMembership.project
+ * reference which will always fail for linked projects.
+ */
+const SYSTEM_REFERENCE_PATHS = [
+  'Project.owner',
+  'Project.link.project',
+  'ProjectMembership.user',
+  'ProjectMembership.invitedBy',
+];
+
+async function validateReferences(
+  repo: Repository,
+  references: TypedValueWithPath[],
+  issues: OperationOutcomeIssue[]
+): Promise<void> {
+  const validated = await repo.readReferences(references.map((r) => r.value));
+  for (let i = 0; i < validated.length; i++) {
+    const reference = validated[i];
+    if (reference instanceof Error) {
+      const path = references[i].path;
+      issues.push(createStructureIssue(path, `Invalid reference (${normalizeErrorString(reference)})`));
+    }
+  }
+}
+
+function isCheckableReference(propertyValue: TypedValue | TypedValue[]): boolean {
+  const valueType = Array.isArray(propertyValue) ? propertyValue[0].type : propertyValue.type;
+  return valueType === PropertyType.Reference;
+}
+
+function shouldValidateReference(ref: Reference): boolean {
+  return Boolean(ref.reference && !ref.reference.startsWith('%') && !ref.reference.startsWith('#'));
+}
+
+class ReferenceCollector implements CrawlerVisitor {
+  private referencesByPath: Record<string, TypedValueWithPath[]> = Object.create(null);
+
+  visitProperty(
+    parent: TypedValueWithPath,
+    _key: string,
+    path: string,
+    propertyValues: (TypedValueWithPath | TypedValueWithPath[])[],
+    _schema: InternalTypeSchema
+  ): void {
+    const values = propertyValues.flat();
+    for (const propertyValue of values) {
+      if (!isCheckableReference(propertyValue) || parent.type === PropertyType.Meta) {
+        return;
+      }
+
+      if (shouldValidateReference(propertyValue.value)) {
+        this.referencesByPath[path] = append(this.referencesByPath[path], propertyValue);
+      }
+    }
+  }
+
+  getReferences(): Record<string, TypedValueWithPath[]> {
+    return this.referencesByPath;
+  }
+}
+
+/**
+ * Collects the Reference values present in the given resource, indexed by FHIR path.
+ * @param resource - The resource to scan for references.
+ * @returns A mapping of FHIR path to reference values (with JSON path)
+ */
+export function collectReferences(resource: Resource): Record<string, TypedValueWithPath[]> {
+  const collector = new ReferenceCollector();
+  crawlTypedValue(toTypedValue(resource), collector, { skipMissingProperties: true });
+  return collector.getReferences();
+}
+
+export async function validateResourceReferences<T extends Resource>(repo: Repository, resource: T): Promise<void> {
+  const references = collectReferences(resource);
+  const userReferences: TypedValueWithPath[] = [];
+  const systemReferences: TypedValueWithPath[] = [];
+
+  for (const path of Object.keys(references)) {
+    if (SYSTEM_REFERENCE_PATHS.includes(path)) {
+      systemReferences.push(...references[path]);
+    } else {
+      userReferences.push(...references[path]);
+    }
+  }
+
+  const issues: OperationOutcomeIssue[] = [];
+  await validateReferences(repo, userReferences, issues);
+  await validateReferences(repo.getSystemRepo(), systemReferences, issues);
+
+  if (issues.length > 0) {
+    throw new OperationOutcomeError({
+      resourceType: 'OperationOutcome',
+      id: randomUUID(),
+      issue: issues,
+    });
+  }
+}
+
+async function resolveReplacementReference(
+  repo: Repository,
+  reference: Reference | undefined,
+  path: string
+): Promise<Reference | undefined> {
+  if (!reference?.reference?.includes?.('?')) {
+    return undefined;
+  }
+
+  const searchCriteria = parseSearchRequest(reference.reference);
+  searchCriteria.sortRules = undefined;
+  searchCriteria.count = 2;
+  const matches = await repo.searchResources(searchCriteria);
+  if (matches.length !== 1) {
+    throw new OperationOutcomeError(
+      badRequest(
+        `Conditional reference '${reference.reference}' ${matches.length ? 'matched multiple' : 'did not match any'} resources`,
+        path
+      )
+    );
+  }
+
+  return createReference(matches[0]);
+}
+
+export async function replaceConditionalReferences<T extends Resource>(repo: Repository, resource: T): Promise<T> {
+  await crawlTypedValueAsync(
+    toTypedValue(resource),
+    {
+      async visitPropertyAsync(parent, key, path, propertyValue, _schema) {
+        if (!isCheckableReference(propertyValue)) {
+          return;
+        }
+
+        if (Array.isArray(propertyValue)) {
+          for (let i = 0; i < propertyValue.length; i++) {
+            const reference = propertyValue[i].value as Reference;
+            const replacement = await resolveReplacementReference(repo, reference, path + '[' + i + ']');
+
+            if (replacement) {
+              parent.value[key][i] = replacement;
+            }
+          }
+        } else {
+          const reference = propertyValue.value as Reference;
+          const replacement = await resolveReplacementReference(repo, reference, path);
+
+          if (replacement) {
+            parent.value[key] = replacement;
+          }
+        }
+      },
+    },
+    { skipMissingProperties: true }
+  );
+
+  return resource;
+}
+
+export function getResourceTypesFromReferences(references: Iterable<Reference>): ResourceType[] {
+  const resourceTypes = new Set<ResourceType>();
+  for (const reference of references) {
+    const resourceType = reference.reference?.split('/')[0];
+    if (resourceType && isResourceType(resourceType)) {
+      resourceTypes.add(resourceType);
+    }
+  }
+  return Array.from(resourceTypes);
+}

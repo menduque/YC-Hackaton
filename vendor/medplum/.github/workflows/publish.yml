@@ -1,0 +1,554 @@
+name: Publish
+
+# Based on: https://docs.github.com/en/actions/publishing-packages/publishing-nodejs-packages
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Every job below declares its own permissions, which replace (not merge with) these
+permissions:
+  contents: read
+
+jobs:
+  build_and_check:
+    name: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      NODE_VERSION: '22'
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+      TURBO_CACHE: 'remote:rw'
+    permissions:
+      contents: write # Required to upload release assets
+      id-token: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Check if latest version
+        id: check-latest
+        run: |
+          CURRENT_TAG="${GITHUB_REF#refs/tags/}"
+          echo "Current Tag: ${CURRENT_TAG}"
+
+          LATEST_TAG=$(gh release view --json tagName -q '.tagName')
+          echo "Latest Tag: ${LATEST_TAG}"
+
+          HIGHEST_TAG=$(printf '%s\n%s' "${CURRENT_TAG}" "${LATEST_TAG}" | sort -V | tail -n1)
+          echo "Highest Tag: ${HIGHEST_TAG}"
+
+          if [ "${CURRENT_TAG}" = "${HIGHEST_TAG}" ]; then
+            echo "Current tag is the latest."
+            echo "result=true" >> $GITHUB_OUTPUT
+          else
+            echo "Current tag is not the latest."
+            echo "result=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          # After v6, the default for `package-manager-cache` is true. We however, have historically used caching with a fallback which is not supported by the setup-node action
+          # See: https://github.com/actions/setup-node/issues/328
+          package-manager-cache: false
+
+      - name: Cache node modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        env:
+          cache-name: cache-node-modules
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-build-${{ env.cache-name }}-
+            ${{ runner.os }}-build-
+            ${{ runner.os }}-
+
+      - name: Slack start message
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {"text": "Starting publish: ${{ github.ref_name }}"}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build:all
+        env:
+          MEDPLUM_BASE_URL: '__MEDPLUM_BASE_URL__'
+          MEDPLUM_CLIENT_ID: '__MEDPLUM_CLIENT_ID__'
+          MEDPLUM_REGISTER_ENABLED: '__MEDPLUM_REGISTER_ENABLED__'
+          MEDPLUM_AWS_TEXTRACT_ENABLED: '__MEDPLUM_AWS_TEXTRACT_ENABLED__'
+          GOOGLE_CLIENT_ID: '__GOOGLE_CLIENT_ID__'
+          RECAPTCHA_SITE_KEY: '__RECAPTCHA_SITE_KEY__'
+
+      # npm 12.0.0 (npm@latest as of 2026-07-08) ships without the bundled `sigstore`
+      # dependency that `npm publish --provenance` requires, causing MODULE_NOT_FOUND
+      # on the first package publish. Pin npm 11.x until https://github.com/npm/cli/issues/9722 is fixed.
+      # Node 24's bundled npm may be older than 11.5.1, which trusted publishing needs.
+      - name: Pin npm 11 for provenance publish
+        run: npm install -g npm@11
+
+      - name: Publish to NPM
+        run: ./scripts/publish.sh
+
+      - name: Sync example repos
+        if: steps.check-latest.outputs.result == 'true'
+        run: ./scripts/update-example-changes.sh "${{ secrets.SYNC_REPO_TOKEN }}"
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to Docker Hub Hardened Images
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: dhi.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build and push server Docker image
+        run: |
+          if [ "${{ steps.check-latest.outputs.result }}" = "true" ]; then
+            ./scripts/build-docker-server.sh --release --latest
+          else
+            ./scripts/build-docker-server.sh --release
+          fi
+        env:
+          SERVER_DOCKERHUB_REPOSITORY: ${{ secrets.DOCKERHUB_REPOSITORY }}
+
+      - name: Build and push app Docker image
+        run: |
+          if [ "${{ steps.check-latest.outputs.result }}" = "true" ]; then
+            ./scripts/build-docker-app.sh --release --latest
+          else
+            ./scripts/build-docker-app.sh --release
+          fi
+        env:
+          APP_DOCKERHUB_REPOSITORY: ${{ secrets.APP_DOCKERHUB_REPOSITORY }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6.2.2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Deploy bot layer
+        if: steps.check-latest.outputs.result == 'true' # only deploy latest versions
+        run: ./scripts/deploy-bot-layer.sh
+
+  build_agent_win64:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      NODE_VERSION: '24'
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+      TURBO_CACHE: 'remote:rw'
+    permissions:
+      contents: write # Required to upload release assets
+      id-token: write # Required for OIDC authentication with Azure Trusted Signing
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install NSIS
+        run: choco install nsis
+
+      - name: Add NSIS to PATH
+        run: echo "C:\Program Files (x86)\NSIS" >> $GITHUB_PATH
+        shell: bash
+
+      - name: Install Wget
+        run: choco install wget
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          # After v6, the default for `package-manager-cache` is true. We however, have historically used caching with a fallback which is not supported by the setup-node action
+          # See: https://github.com/actions/setup-node/issues/328
+          package-manager-cache: false
+
+      # See: https://github.com/actions/cache/blob/cdf6c1fa76f9f475f3d7449005a359c84ca0f306/examples.md#node---npm
+      - name: Get npm cache directory
+        id: npm-cache-dir
+        shell: pwsh
+        run: echo "dir=$(npm config get cache)" >> ${env:GITHUB_OUTPUT}
+
+      - name: Cache node modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        env:
+          cache-name: cache-node-modules
+        with:
+          path: ${{ steps.npm-cache-dir.outputs.dir }}
+          key: ${{ runner.os }}-build-agent-${{ env.cache-name }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-build-agent-${{ env.cache-name }}-
+            ${{ runner.os }}-build-agent
+            ${{ runner.os }}-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set repo hash for agent build
+        shell: bash
+        # This forces git shorthash to match between @medplum/agent and @medplum/core
+        run: |
+          set -e
+          echo "MEDPLUM_GIT_SHORTHASH=$(git rev-parse --short=7 HEAD)" >> $GITHUB_ENV
+
+      - name: Build
+        run: npm run build -- --filter=@medplum/agent
+
+      - name: Find signtool
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        id: find-signtool
+        with:
+          result-encoding: string
+          script: |
+            const fs = require('node:fs/promises');
+
+            /**
+            * Searches the installed Windows SDKs for the most recent signtool.exe version
+            * Taken from https://github.com/dlemstra/code-sign-action
+            * @returns Path to most recent signtool.exe (x86 version)
+            */
+            async function getSigntoolLocation() {
+                const windowsKitsFolder = 'C:/Program Files (x86)/Windows Kits/10/bin/';
+                const folders = await fs.readdir(windowsKitsFolder);
+                let fileName = '';
+                let maxVersion = 0;
+                for (const folder of folders) {
+                    if (!folder.endsWith('.0')) {
+                        continue;
+                    }
+                    const folderVersion = Number.parseInt(folder.replaceAll('.',''));
+                    if (folderVersion > maxVersion) {
+                        const signtoolFilename = `${windowsKitsFolder}${folder}/x64/signtool.exe`;
+                        try {
+                            const stat = await fs.stat(signtoolFilename);
+                            if (stat.isFile()) {
+                                fileName = signtoolFilename;
+                                maxVersion = folderVersion;
+                            }
+                        } catch {
+                            console.warn('Skipping %s due to error.', signtoolFilename);
+                        }
+                    }
+                }
+                if(fileName == '') {
+                    throw new Error('Unable to find signtool.exe in ' + windowsKitsFolder);
+                }
+
+                console.log(fileName);
+                return fileName;
+            }
+
+            const path = await getSigntoolLocation();
+            return path.replace(' ', '\ ');
+
+      - name: Build Agent executable and download dependencies
+        shell: bash
+        run: ./scripts/build-agent-win64.sh
+        env:
+          SHAWL_VERSION: 'v1.7.0'
+          SIGNTOOL_PATH: ${{steps.find-signtool.outputs.result}}
+
+      - name: Login to Azure
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: Sign executables with Azure Trusted Signing
+        uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          exclude-azure-cli-credential: true
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-powershell-credential: false
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+          endpoint: https://eus.codesigning.azure.net/
+          trusted-signing-account-name: GitHubActionSigner
+          certificate-profile-name: MedplumCI
+          files-folder: ${{ github.workspace }}\packages\agent\dist
+          files-folder-filter: medplum-agent-*-win64.exe,shawl-*.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          append-signature: true
+
+      - name: Set Azure CodeSigning DLL path
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -Path "$env:LOCALAPPDATA" -Filter "Azure.CodeSigning.Dlib.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dll) {
+            $folder = Split-Path $dll.FullName -Parent
+            echo "AZURE_CODESIGNING_PATH=$folder" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            Write-Host "Set AZURE_CODESIGNING_PATH=$folder"
+          } else {
+            Write-Error "Azure.CodeSigning.Dlib.dll not found"
+            exit 1
+          }
+
+      - name: Import GPG key
+        run: echo "${{ secrets.MEDPLUM_RELEASE_GPG_KEY }}" | gpg --batch --no-tty --import
+
+      - name: Build Agent installer
+        shell: bash
+        run: ./scripts/build-agent-installer-win64.sh
+        env:
+          SHAWL_VERSION: 'v1.7.0'
+          SIGNTOOL_PATH: ${{steps.find-signtool.outputs.result}}
+          GPG_KEY_ID: ${{ secrets.MEDPLUM_RELEASE_GPG_KEY_ID }}
+          GPG_PASSPHRASE: ${{ secrets.MEDPLUM_RELEASE_GPG_PASSPHRASE }}
+
+      - name: Upload Agent installer
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const packageJson = require('./packages/agent/package.json');
+            const fs = require('fs');
+            const tag = context.ref.replace("refs/tags/", "");
+            const release = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
+              name: "medplum-agent-installer-" + packageJson.version + ".exe",
+              data: await fs.readFileSync(`packages/agent/medplum-agent-installer-${packageJson.version}-${process.env.MEDPLUM_GIT_SHORTHASH}.exe`)
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
+              name: "medplum-agent-installer-" + packageJson.version + ".exe.sha256",
+              data: await fs.readFileSync(`packages/agent/medplum-agent-installer-${packageJson.version}-${process.env.MEDPLUM_GIT_SHORTHASH}.exe.sha256`)
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
+              name: "medplum-agent-installer-" + packageJson.version + ".exe.asc",
+              data: await fs.readFileSync(`packages/agent/medplum-agent-installer-${packageJson.version}-${process.env.MEDPLUM_GIT_SHORTHASH}.exe.asc`)
+            });
+
+  build_agent_linux:
+    strategy:
+      matrix:
+        arch:
+          - image: ubuntu-latest
+            suffix: x64
+          - image: ubuntu-24.04-arm
+            suffix: arm64
+    runs-on: ${{ matrix.arch.image }}
+    timeout-minutes: 45
+    env:
+      NODE_VERSION: '24'
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+      TURBO_CACHE: 'remote:rw'
+    permissions:
+      contents: write # Required to upload release assets
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Import GPG key
+        run: echo "${{ secrets.MEDPLUM_RELEASE_GPG_KEY }}" | gpg --batch --no-tty --import
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          # After v6, the default for `package-manager-cache` is true. We however, have historically used caching with a fallback which is not supported by the setup-node action
+          # See: https://github.com/actions/setup-node/issues/328
+          package-manager-cache: false
+
+      - name: Cache node modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        env:
+          cache-name: cache-node-modules
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-build-agent-${{ env.cache-name }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-build-agent-${{ env.cache-name }}-
+            ${{ runner.os }}-build-agent
+            ${{ runner.os }}-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set repo hash for agent build
+        shell: bash
+        # This forces git shorthash to match between @medplum/agent and @medplum/core
+        run: |
+          set -e
+          echo "MEDPLUM_GIT_SHORTHASH=$(git rev-parse --short=7 HEAD)" >> $GITHUB_ENV
+
+      - name: Build
+        run: npm run build -- --filter=@medplum/agent
+
+      - name: Build Agent
+        shell: bash
+        run: ./scripts/build-agent-installer-linux.sh
+        env:
+          GPG_KEY_ID: ${{ secrets.MEDPLUM_RELEASE_GPG_KEY_ID }}
+          GPG_PASSPHRASE: ${{ secrets.MEDPLUM_RELEASE_GPG_PASSPHRASE }}
+
+      - name: Upload Agent
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const packageJson = require('./packages/agent/package.json');
+            const fs = require('fs');
+            const tag = context.ref.replace("refs/tags/", "");
+            const release = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
+              name: "medplum-agent-" + packageJson.version + "-linux-${{ matrix.arch.suffix }}",
+              data: await fs.readFileSync(`packages/agent/medplum-agent-${packageJson.version}-linux`)
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
+              name: "medplum-agent-" + packageJson.version + "-linux-${{ matrix.arch.suffix }}.sha256",
+              data: await fs.readFileSync(`packages/agent/medplum-agent-${packageJson.version}-linux.sha256`)
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
+              name: "medplum-agent-" + packageJson.version + "-linux-${{ matrix.arch.suffix }}.asc",
+              data: await fs.readFileSync(`packages/agent/medplum-agent-${packageJson.version}-linux.asc`)
+            });
+
+  build_agent_macos:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      NODE_VERSION: '24'
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+      TURBO_CACHE: 'remote:rw'
+    permissions:
+      contents: write # Required to upload release assets
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Import GPG key
+        run: echo "${{ secrets.MEDPLUM_RELEASE_GPG_KEY }}" | gpg --batch --no-tty --import
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          # After v6, the default for `package-manager-cache` is true. We however, have historically used caching with a fallback which is not supported by the setup-node action
+          # See: https://github.com/actions/setup-node/issues/328
+          package-manager-cache: false
+
+      - name: Cache node modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        env:
+          cache-name: cache-node-modules
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-build-agent-${{ env.cache-name }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-build-agent-${{ env.cache-name }}-
+            ${{ runner.os }}-build-agent
+            ${{ runner.os }}-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set repo hash for agent build
+        shell: bash
+        # This forces git shorthash to match between @medplum/agent and @medplum/core
+        run: |
+          set -e
+          echo "MEDPLUM_GIT_SHORTHASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Build
+        run: npm run build -- --filter=@medplum/agent
+
+      - name: Build Agent
+        shell: bash
+        run: ./scripts/build-agent-macos.sh
+        env:
+          GPG_KEY_ID: ${{ secrets.MEDPLUM_RELEASE_GPG_KEY_ID }}
+          GPG_PASSPHRASE: ${{ secrets.MEDPLUM_RELEASE_GPG_PASSPHRASE }}
+
+      - name: Upload Agent
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const packageJson = require('./packages/agent/package.json');
+            const fs = require('fs');
+            const tag = context.ref.replace("refs/tags/", "");
+            const release = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
+              name: "medplum-agent-" + packageJson.version + "-macos-arm64",
+              data: await fs.readFileSync(`packages/agent/medplum-agent-${packageJson.version}-macos`)
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
+              name: "medplum-agent-" + packageJson.version + "-macos-arm64.sha256",
+              data: await fs.readFileSync(`packages/agent/medplum-agent-${packageJson.version}-macos.sha256`)
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.data.id,
+              name: "medplum-agent-" + packageJson.version + "-macos-arm64.asc",
+              data: await fs.readFileSync(`packages/agent/medplum-agent-${packageJson.version}-macos.asc`)
+            });

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+set -xe
+
+PACKAGES=(
+  "agent"
+  "app"
+  "bot-layer"
+  "ccda"
+  "cdk"
+  "cli"
+  "cli-wrapper"
+  "core"
+  "create-medplum"
+  "definitions"
+  "dosespot-core"
+  "dosespot-react"
+  "eslint-config"
+  "fhir-router"
+  "fhirtypes"
+  "health-gorilla-core"
+  "health-gorilla-react"
+  "hl7"
+  "mock"
+  "react"
+  "react-hooks"
+  "scriptsure-react"
+)
+
+for package in ${PACKAGES[@]}; do
+  echo "Publish $package"
+  pushd packages/$package
+  cp ../../LICENSE.txt .
+  cp ../../NOTICE .
+  npm publish --provenance --access public
+  popd
+done

@@ -1,0 +1,246 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { SearchRequest } from '@medplum/core';
+import {
+  accepted,
+  AccessPolicyInteraction,
+  allOk,
+  append,
+  badRequest,
+  concatUrls,
+  EMPTY,
+  forbidden,
+  isResourceType,
+  notFound,
+  OperationOutcomeError,
+  parseSearchRequest,
+} from '@medplum/core';
+import type { FhirRequest, FhirResponse } from '@medplum/fhir-router';
+import type { AsyncJob, Parameters, Reference, Resource, ResourceType } from '@medplum/fhirtypes';
+import { getConfig } from '../../config/loader';
+import { getAuthenticatedContext } from '../../context';
+import { addSetAccountsJobData } from '../../workers/set-accounts';
+import { CancelledError } from '../../workers/utils';
+import type { Repository, SystemRepository } from '../repo';
+import { makeOperationDefinition } from './definitions';
+import { searchPatientCompartment } from './patienteverything';
+import { AsyncJobExecutor } from './utils/asyncjobexecutor';
+import { buildOutputParameters, parseInputParameters } from './utils/parameters';
+
+const operation = makeOperationDefinition(
+  { scope: 'instance', resource: 'Resource' as ResourceType },
+  {
+    id: 'set-accounts',
+    name: 'SetAccounts',
+    code: 'set-accounts',
+    description: `Updates account references for the target resource, and optionally any resources in the target's FHIR compartment`,
+    parameter: [
+      {
+        use: 'in',
+        name: 'accounts',
+        documentation: 'List of account references to set',
+        type: 'Reference',
+        min: 0,
+        max: '*',
+      },
+      {
+        use: 'in',
+        name: 'propagate',
+        documentation: 'If set, also push changes to other resources in the compartment of the target resource',
+        type: 'boolean',
+        min: 0,
+        max: '1',
+      },
+      {
+        use: 'out',
+        name: 'resourcesUpdated',
+        documentation: 'Number of resources that were updated',
+        type: 'integer',
+        min: 1,
+        max: '1',
+      },
+    ],
+  }
+);
+
+export interface SetAccountsParameters {
+  accounts: Reference[];
+  propagate?: boolean;
+}
+
+/**
+ * Handles the $set-accounts operation.
+ * This operation updates the account reference for  a resource, and optionally
+ * all resources in the target compartment as well.
+ *
+ * NOTE: the operation is currently capped at 1000 resources in the patient compartment.
+ * @param req - The FHIR request.
+ * @returns The FHIR response.
+ */
+export async function setAccountsHandler(req: FhirRequest): Promise<FhirResponse> {
+  const { id, resourceType } = req.params;
+  if (!id || !resourceType) {
+    return [badRequest('Must specify resource type and ID')];
+  }
+
+  if (!isResourceType(resourceType)) {
+    return [badRequest('Invalid resource type')];
+  }
+
+  const params = parseInputParameters<SetAccountsParameters>(operation, req);
+
+  const { repo } = getAuthenticatedContext();
+  if (req.headers?.['prefer'] === 'respond-async' && params.propagate) {
+    const { baseUrl } = getConfig();
+    const exec = new AsyncJobExecutor(repo);
+    const asyncJob = await exec.init(concatUrls(baseUrl, `${resourceType}/${id}/$set-accounts`));
+    await exec.run(async () => {
+      await addSetAccountsJobData({
+        asyncJob,
+        resourceType,
+        id,
+        accounts: params.accounts,
+        authState: getAuthenticatedContext().authState,
+      });
+    });
+
+    return [accepted(exec.getContentLocation(baseUrl))];
+  } else {
+    const result = await setResourceAccounts(repo, resourceType, id, params);
+    return [allOk, result];
+  }
+}
+
+export async function setResourceAccounts(
+  repo: Repository,
+  resourceType: ResourceType,
+  id: string,
+  params: SetAccountsParameters
+): Promise<Parameters>;
+export async function setResourceAccounts(
+  repo: Repository,
+  resourceType: ResourceType,
+  id: string,
+  params: SetAccountsParameters,
+  asyncJobId: string
+): Promise<Parameters | undefined>;
+/**
+ * Sets the `meta.accounts` array for the given resource, and optionally all resources in its compartment.
+ * @param repo - The FHIR repository of the user.
+ * @param resourceType - The type of the target resource.
+ * @param id - The ID of the target resource.
+ * @param params - Operation parameters.
+ * @param asyncJobId - (Optional) ID to use to track the status of the parent job.
+ * @returns The number of resources updated, or undefined if the operation could not finish.
+ */
+export async function setResourceAccounts(
+  repo: Repository,
+  resourceType: ResourceType,
+  id: string,
+  params: SetAccountsParameters,
+  asyncJobId?: string
+): Promise<Parameters | undefined> {
+  const isSuperAdmin = repo.isSuperAdmin();
+  if (!repo.isProjectAdmin() && !isSuperAdmin) {
+    throw new OperationOutcomeError(forbidden);
+  }
+
+  // Use extended mode to read the resource, ensuring we get access to the full `meta.accounts`
+  const systemRepo = repo.getSystemRepo();
+  const userRepo = repo.withOverrideConfig({ extendedMode: true });
+
+  const target = await systemRepo.readResource(resourceType, id);
+  // Ensure user's repo can read this resource as well
+  if (!userRepo.canPerformInteraction(AccessPolicyInteraction.READ, target)) {
+    throw new OperationOutcomeError(notFound);
+  }
+  const accounts = params.accounts;
+  const oldAccounts = target.meta?.accounts;
+
+  // Update the target resource with the new accounts
+  target.meta = {
+    ...target.meta,
+    accounts: accounts,
+    account: accounts?.[0],
+  };
+  if (!userRepo.canPerformInteraction(AccessPolicyInteraction.UPDATE, target)) {
+    throw new OperationOutcomeError(forbidden);
+  }
+  await getAuthenticatedContext().fhirRateLimiter?.recordWrite();
+  await systemRepo.updateResource(target);
+  let count = 1; // Target resource is updated already
+
+  if (params.propagate && target.resourceType === 'Patient') {
+    // Calculate the difference between the previous accounts array and new one, in order to
+    // propagate only those changes to compartment resources
+    const additions = accounts.filter((a) => !oldAccounts?.find((o) => o.reference === a.reference));
+    const removals = oldAccounts?.filter((o) => !accounts.some((a) => a.reference === o.reference)) ?? [];
+
+    // Update the resources in the target compartment to trigger meta.accounts refresh
+    const search: Partial<SearchRequest> = { offset: 0, count: 1000 };
+    const maxSearchOffset = getConfig().maxSearchOffset ?? Number.POSITIVE_INFINITY;
+    while ((search.offset ?? 0) <= maxSearchOffset) {
+      if (asyncJobId) {
+        const shouldContinue = await shouldJobContinue(systemRepo, asyncJobId);
+        if (!shouldContinue) {
+          throw new CancelledError('Job cancelled');
+        }
+      }
+
+      const bundle = await searchPatientCompartment(userRepo, target, search);
+      for (const entry of bundle.entry ?? EMPTY) {
+        const resource = entry.resource;
+        if (resource && resource.resourceType !== 'Patient') {
+          await updateCompartmentResource(systemRepo, resource, additions, removals);
+          count++;
+        }
+      }
+      const nextLink = bundle.link?.find((l) => l.relation === 'next');
+      if (nextLink?.url) {
+        // Update search pagination to next page
+        const nextSearch = parseSearchRequest(nextLink.url);
+        search.offset = nextSearch.offset;
+        search.cursor = nextSearch.cursor;
+      } else {
+        break;
+      }
+    }
+  }
+
+  return buildOutputParameters(operation, { resourcesUpdated: count });
+}
+
+async function updateCompartmentResource<T extends Resource>(
+  systemRepo: SystemRepository,
+  resource: T,
+  additions: Reference[],
+  removals: Reference[]
+): Promise<T> {
+  let accountList = resource.meta?.accounts;
+  for (const added of additions) {
+    if (!accountList?.find((a) => a.reference === added.reference)) {
+      accountList = append(accountList, added);
+    }
+  }
+  for (const dropped of removals) {
+    const index = accountList?.findIndex((a) => a.reference === dropped.reference) ?? -1;
+    if (index > -1) {
+      accountList?.splice(index, 1);
+    }
+  }
+
+  resource.meta = {
+    ...resource.meta,
+    accounts: accountList,
+    account: accountList?.[0],
+  };
+  // Use system repo to force update meta.accounts
+  await getAuthenticatedContext().fhirRateLimiter?.recordWrite();
+  return systemRepo.updateResource(resource);
+}
+
+const healthyJobStatuses: AsyncJob['status'][] = ['accepted', 'active'];
+async function shouldJobContinue(systemRepo: SystemRepository, asyncJobId: string): Promise<boolean> {
+  const asyncJob = await systemRepo.readResource<AsyncJob>('AsyncJob', asyncJobId);
+  return healthyJobStatuses.includes(asyncJob.status);
+}
