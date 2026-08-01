@@ -118,6 +118,7 @@ async function handleFunctionCalls(
     try {
       const result = await dispatchFunction(call.name, args, { callId });
       content = JSON.stringify(result ?? { ok: true });
+      tell(browser, { type: "function_result", name: call.name, result });
     } catch (err) {
       content = JSON.stringify({ error: (err as Error).message });
       tell(browser, { type: "function_error", name: call.name, error: (err as Error).message });

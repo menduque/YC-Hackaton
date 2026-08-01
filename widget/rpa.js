@@ -13,6 +13,18 @@
   const PROF_DAPONTE_FRANCO = 'e3244abc-6a1d-11eb-a788-94de80a26d48';
   const PROF_LABEL = 'DAPONTE Franco';
 
+  // Busqueda de pacientes (pacientes.php). Verificado en vivo: el form es un
+  // POST plano, sin onsubmit, asi que no hace falta manejar el DOM ni navegar
+  // la pestania — alcanza un fetch same-origin con la sesion ya abierta.
+  const PACIENTES_URL = 'pacientes.php';
+  const CAMPO_DNI = 'paciente_dni';
+  const CAMPO_APELLIDO = 'paciente_apellido';
+  const CAMPO_NOMBRE = 'paciente_nombres';
+  const CAMPO_TIPO_DOC = 'turno_tipo_doc';
+  const FORM_BUSQUEDA = 'top_form';
+  // La tabla de resultados es la unica cuyo header contiene esto.
+  const HEADER_RESULTADOS = 'Nro Doc.';
+
   const VERDE = '#A4F751'; // dia con slots libres
   const ROJO = '#F58683'; // dia sin disponibilidad
 
@@ -395,6 +407,111 @@
     return true;
   }
 
+  // -------------------------------------------------- busqueda de pacientes
+
+  /**
+   * Trae pacientes.php y devuelve su form de busqueda ya parseado.
+   *
+   * Armamos el body a partir del form real en vez de hardcodear la lista de
+   * campos: Treelan manda varios selects (Deudor, Condicion, Procedencia) cuyo
+   * valor por defecto no es obvio, y mandar el form completo es lo que verifique
+   * que funciona. Un GET extra es barato y esto sobrevive cambios del form.
+   */
+  async function traerFormBusqueda() {
+    const res = await fetch(PACIENTES_URL, { credentials: 'include' });
+    if (!res.ok) throw new RpaStop(`Treelan respondio ${res.status} al abrir la busqueda`);
+    const html = await decodificar(res);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const form = doc.forms[FORM_BUSQUEDA];
+    if (!form) {
+      throw new RpaStop('No se encontro el form de busqueda de pacientes (sesion vencida?)');
+    }
+    return form;
+  }
+
+  /**
+   * pacientes.php se sirve en ISO-8859-1, no UTF-8. Con res.text() los acentos
+   * y el simbolo de grado salen rotos ("cespedes 1244 1?B").
+   */
+  async function decodificar(res) {
+    const buf = await res.arrayBuffer();
+    return new TextDecoder('iso-8859-1').decode(buf);
+  }
+
+  /** Filas de la tabla de resultados -> objetos. [] si no hubo coincidencias. */
+  function parsearResultados(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    // Ojo: hay que exigir que UNA CELDA del header sea exactamente "Nro Doc.".
+    // Con un innerText.includes() matchea antes una tabla contenedora de 1 fila
+    // que envuelve a la de resultados, y la busqueda devuelve vacio siempre.
+    const tabla = [...doc.querySelectorAll('table')].find((t) =>
+      [...(t.rows[0]?.cells || [])].some(
+        (c) => c.textContent.trim() === HEADER_RESULTADOS,
+      ),
+    );
+    // Sin resultados la tabla existe igual, con solo la fila de header: no hay
+    // ningun cartel de "no se encontro" que buscar.
+    if (!tabla || tabla.rows.length < 2) return [];
+
+    return [...tabla.rows]
+      .slice(1)
+      .map((tr) =>
+        // Treelan intercala celdas espaciadoras vacias entre columna y columna.
+        [...tr.cells].map((td) => td.textContent.trim()).filter((s) => s.length),
+      )
+      .filter((c) => c.length >= 4)
+      .map((c) => {
+        const nombreCompleto = c[1] || '';
+        const coma = nombreCompleto.indexOf(',');
+        return {
+          hc: c[0] || '',
+          apellido: coma >= 0 ? nombreCompleto.slice(0, coma).trim() : nombreCompleto,
+          nombre: coma >= 0 ? nombreCompleto.slice(coma + 1).trim() : '',
+          nombreCompleto,
+          dni: c[2] || '',
+          fechaNacimiento: c[3] || '',
+          domicilio: c[4] || '',
+          estado: c[5] || '',
+          procedencia: c[6] || '',
+        };
+      });
+  }
+
+  /**
+   * Busca un paciente por documento o por nombre y devuelve lo que Treelan lista.
+   *
+   * Ojo con multi-resultado: no es teorico. En la base real hay tres pacientes
+   * cargados con el DNI comodin 99999999, asi que quien llame tiene que
+   * desambiguar. Nunca devolvemos "el mas parecido".
+   */
+  async function buscarPaciente({ dni, apellido, nombre, tipoDoc } = {}) {
+    const form = await traerFormBusqueda();
+    const fd = new FormData(form);
+    if (dni) {
+      fd.set(CAMPO_DNI, String(dni));
+      fd.set(CAMPO_TIPO_DOC, tipoDoc || 'DNI');
+    }
+    if (apellido) fd.set(CAMPO_APELLIDO, String(apellido));
+    if (nombre) fd.set(CAMPO_NOMBRE, String(nombre));
+
+    const body = new URLSearchParams();
+    for (const [k, v] of fd.entries()) body.append(k, typeof v === 'string' ? v : '');
+    // El submit es <input type="image">: el server espera sus coordenadas.
+    body.append('button3.x', '40');
+    body.append('button3.y', '15');
+
+    const res = await fetch(PACIENTES_URL, {
+      method: 'POST',
+      body,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      credentials: 'include',
+    });
+    if (!res.ok) throw new RpaStop(`Treelan respondio ${res.status} al buscar el paciente`);
+
+    const pacientes = parsearResultados(await decodificar(res));
+    return { encontrado: pacientes.length > 0, cantidad: pacientes.length, pacientes };
+  }
+
   /** Cancelar de Treelan: recarga el panel vacio. No agenda nada. */
   function resetPanel() {
     const doc = frameDoc(panelFrame());
@@ -432,5 +549,7 @@
     marcarRadio,
     markUnresolved,
     resetPanel,
+    buscarPaciente,
+    parsearResultados,
   };
 })();

@@ -42,15 +42,38 @@ HARD RULES about times — breaking these breaks the booking:
 - If they ask for a day that isn't in the list above, say which days the doctor
   has and let them choose.
 
+## Identify the caller FIRST
+
+Open by asking for their full name — or their ID number, if they're already a
+patient here. Something like: "Can I get your full name? Or your ID number if
+you're already a patient with us."
+
+The moment they give you either one, call buscar_paciente. Do not ask anything
+else first, and do not start collecting appointment details before you know who
+they are.
+
+- encontrado: true — greet them by FIRST NAME and say they saw ${DOCTOR.display}
+  last time, then ask to book with him. For example: "Cristobal! You saw
+  ${DOCTOR.display} last time. Is it ok if I book your consultation with him?"
+  We already have their name, address and date of birth from the chart — do NOT
+  ask for any of it again. Move straight on to the date and time.
+- encontrado: false — tell them you can't find them and collect their full name
+  and date of birth so you can register them as a new patient.
+- ambiguo: true — more than one patient matches. Ask for their date of birth to
+  tell them apart. Never guess which one they are.
+
+Never read their chart number or home address out loud unless they ask.
+
 ## What to collect
 
-Required to book (ask for these):
-1. FULL NAME — split it into last name and first name when you prepare the appointment.
-2. ID number (national ID). Read it back once to confirm.
-3. Date and time, picked from buscar_disponibilidad.
-4. Insurance ("Do you have insurance, or is this a private visit?"). The clinic
+For a patient buscar_paciente already found, skip 1 and collect 2, 3 and 4 —
+their identity is already settled, but the appointment details are not.
+
+1. FULL NAME and ID number — only for callers who were NOT found.
+2. Date and time, picked from buscar_disponibilidad.
+3. Insurance ("Do you have insurance, or is this a private visit?"). The clinic
    takes OSDE, GALENO, MEDIFE, OMINT, or PARTICULAR for private. Never invent a plan.
-5. Contact lenses — one quick question: "Do you wear contact lenses?" It's an eye
+4. Contact lenses — one quick question: "Do you wear contact lenses?" It's an eye
    clinic and the chart requires it.
 
 Capture, but never interrogate for: phone, cell, email, address, and the reason
@@ -64,6 +87,9 @@ anything relevant) into "comentarios".
 
 Once you have the slot and the details, call preparar_turno with EVERYTHING that
 came up in the call — every field the caller gave you, not just the required ones.
+If buscar_paciente already identified them, their name, ID, address and date of
+birth are attached automatically: pass what you have and don't stall the call
+trying to re-collect the rest.
 
 That function call is what actually loads the appointment. Nothing else does:
 - Call preparar_turno FIRST, and only say your closing line after it comes back.
@@ -97,6 +123,31 @@ export const AGENT_FUNCTIONS = [
         franja: {
           type: "string",
           enum: ["morning", "afternoon", "any"],
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "buscar_paciente",
+    description:
+      "Look the caller up in the clinic's records (Treelan). Call this IMMEDIATELY " +
+      "after they give their ID number or their full name, before asking anything " +
+      "else. Returns encontrado plus their first name if they're already a patient.",
+    parameters: {
+      type: "object",
+      properties: {
+        documento: {
+          type: "string",
+          description: "ID number, digits only — no dots or spaces",
+        },
+        apellido: {
+          type: "string",
+          description: "Last name, if they gave a name instead of an ID number",
+        },
+        nombre: {
+          type: "string",
+          description: "First name, if they gave a name instead of an ID number",
         },
       },
       required: [],
@@ -202,13 +253,14 @@ export const AGENT_FUNCTIONS = [
 ] as const;
 
 export const GREETING =
-  "Daponte Clinic, Dr. Daponte's office — how can I help you?";
+  "Daponte Clinic, Dr. Daponte's office. Can I get your full name — " +
+  "or your ID number, if you're already a patient with us?";
 
 /** Full Settings payload for the Deepgram Voice Agent v1 WS
  * (wss://agent.deepgram.com/v1/agent/converse).
- * - listen nova-3 + language "es" for Spanish STT
+ * - listen nova-3 + language "en"
  * - think open_ai/gpt-4o-mini is Deepgram-hosted (no extra key needed)
- * - speak aura-2-selena-es: Latin-American Spanish female voice
+ * - speak aura-2-thalia-en
  * Functions omit `endpoint` → they're handled client-side (by our backend). */
 export function buildAgentSettings() {
   return {

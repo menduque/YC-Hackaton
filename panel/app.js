@@ -80,6 +80,9 @@ function handleEvent(m) {
     case "function_call":
       addFn(m.name, m.arguments);
       break;
+    case "function_result":
+      if (m.name === "buscar_paciente") showPaciente(m.result);
+      break;
     case "function_error":
       addFn(m.name, { error: m.error });
       break;
@@ -162,6 +165,29 @@ function addFn(name, args) {
   el.innerHTML = `<b>${name}</b><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre>`;
   fns.prepend(el);
 }
+function showPaciente(r) {
+  if (!r) return;
+  const box = document.getElementById("paciente");
+  if (r.ambiguo) {
+    box.innerHTML =
+      `<div class="pac nuevo"><div class="who">varios coinciden</div>` +
+      `<div class="nom">${escapeHtml(String(r.opciones ? r.opciones.length : "?"))} pacientes</div>` +
+      `<div class="meta">desambiguando por fecha de nacimiento</div></div>`;
+    return;
+  }
+  if (!r.encontrado) {
+    box.innerHTML =
+      `<div class="pac nuevo"><div class="who">paciente nuevo</div>` +
+      `<div class="nom">sin ficha</div>` +
+      `<div class="meta">se da de alta en la llamada</div></div>`;
+    return;
+  }
+  box.innerHTML =
+    `<div class="pac"><div class="who">paciente identificado</div>` +
+    `<div class="nom">${escapeHtml(`${r.nombre || ""} ${r.apellido || ""}`.trim())}</div>` +
+    `<div class="meta">HC ${escapeHtml(r.hc || "—")} · ${escapeHtml(r.fechaNacimiento || "—")}</div></div>`;
+}
+
 function escapeHtml(s) {
   return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 }

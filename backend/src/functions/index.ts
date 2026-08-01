@@ -1,7 +1,8 @@
 import { medplum } from "../clients/medplum.js";
 import { stedi } from "../clients/stedi.js";
 import { moss } from "../clients/moss.js";
-import { pushSchedule } from "../ws/widgetHub.js";
+import { pushSchedule, requestWidget } from "../ws/widgetHub.js";
+import { recordado, recordar } from "../session/pacientes.js";
 import {
   DOCTOR,
   diaDeAgenda,
@@ -101,6 +102,111 @@ export const handlers: Record<string, Handler> = {
     };
   },
 
+  /**
+   * Looks the caller up in Treelan, through the widget (the browser holds the
+   * session; the backend has no Treelan credentials by design — handoff §0).
+   *
+   * Deliberately NOT a semantic search: an ID number is an exact key, and
+   * "closest match" here means greeting the wrong person.
+   */
+  async buscar_paciente(
+    args: { documento?: string; apellido?: string; nombre?: string },
+    ctx,
+  ) {
+    // STT writes ID numbers with dots and spaces constantly ("41.172.745").
+    const dni = txt(args?.documento).replace(/[.\s-]/g, "");
+    const apellido = txt(args?.apellido);
+    const nombre = txt(args?.nombre);
+
+    if (!dni && !apellido && !nombre) {
+      return {
+        ok: false,
+        instruccion:
+          "Ask the caller for their ID number, or their full name if they don't have it handy.",
+      };
+    }
+    if (dni && !/^\d{7,8}$/.test(dni)) {
+      return {
+        ok: false,
+        instruccion:
+          "That ID number doesn't look right. Ask them to repeat it digit by digit.",
+      };
+    }
+
+    let res: BuscarPacienteResult;
+    try {
+      res = await requestWidget<BuscarPacienteResult>(
+        ctx.callId,
+        "OIDO_BUSCAR_PACIENTE",
+        { dni, apellido, nombre },
+      );
+    } catch (err) {
+      // Demo insurance: an expired Treelan session or a closed tab must not
+      // leave the agent silent mid-call. The real path is the one above.
+      const fallback = fallbackPaciente(dni);
+      console.warn(
+        `[buscar_paciente] widget unreachable (${(err as Error).message}) — ` +
+          `falling back to ${fallback ? "the seeded demo patient" : "not-found"}`,
+      );
+      res = {
+        encontrado: Boolean(fallback),
+        cantidad: fallback ? 1 : 0,
+        pacientes: fallback ? [fallback] : [],
+      };
+    }
+
+    if (!res.encontrado || res.pacientes.length === 0) {
+      return {
+        encontrado: false,
+        instruccion:
+          "Tell them you can't find them in the system and collect their full name " +
+          "and date of birth to register them as a new patient.",
+      };
+    }
+
+    if (res.pacientes.length > 1) {
+      return {
+        encontrado: true,
+        ambiguo: true,
+        opciones: res.pacientes.map((p) => ({
+          nombre: p.nombre,
+          apellido: p.apellido,
+          fechaNacimiento: p.fechaNacimiento,
+        })),
+        instruccion:
+          "Several patients share that identifier. Ask for their date of birth to " +
+          "tell them apart, then call buscar_paciente again — do NOT guess.",
+      };
+    }
+
+    const p = res.pacientes[0]!;
+    recordar(ctx.callId, {
+      hc: p.hc,
+      apellido: p.apellido,
+      nombre: p.nombre,
+      nombreCompleto: p.nombreCompleto,
+      documento: p.dni,
+      tipoDoc: "DNI",
+      fechaNacimiento: p.fechaNacimiento,
+      domicilio: p.domicilio,
+      procedencia: p.procedencia,
+    });
+
+    return {
+      encontrado: true,
+      nombre: p.nombre,
+      apellido: p.apellido,
+      hc: p.hc,
+      fechaNacimiento: p.fechaNacimiento,
+      doctor: DOCTOR.display,
+      instruccion:
+        `Greet them by first name ("${p.nombre}"), tell them they saw ${DOCTOR.display} ` +
+        `last time, and ask if it's ok to book the consultation with him. ` +
+        `We already have their name, address and date of birth — do NOT ask for them again. ` +
+        `Do not read the chart number or address out loud.`,
+    };
+  },
+
   async obtener_contexto_paciente(args: { documento: string }) {
     const [history, fhir] = await Promise.allSettled([
       moss.retrieve(`historia paciente documento ${args.documento}`),
@@ -168,7 +274,14 @@ export const handlers: Record<string, Handler> = {
       };
     }
 
-    const pac = args?.paciente ?? {};
+    // The caller who was identified by buscar_paciente never dictates their
+    // surname or address again, so fill those from Treelan. Model-supplied
+    // fields win, so an explicit correction on the call still takes effect.
+    const guardado = recordado(ctx.callId);
+    const pac: Record<string, any> = {
+      ...(guardado ?? {}),
+      ...noVacios(args?.paciente),
+    };
     const payload: TurnoPayload = {
       fecha,
       hora,
@@ -270,6 +383,57 @@ function withTimeout<T>(p: Promise<T>, ms: number) {
 
 const txt = (v: unknown) => String(v ?? "").trim();
 const opt = (k: string, v: unknown) => (txt(v) ? { [k]: txt(v) } : {});
+
+/**
+ * Drops empty/absent keys so a blank from the model can't wipe a real value we
+ * already read out of Treelan.
+ */
+function noVacios(o: unknown): Record<string, unknown> {
+  if (!o || typeof o !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(o as Record<string, unknown>).filter(([, v]) => txt(v) !== ""),
+  );
+}
+
+/** One row of Treelan's patient search grid, as parsed by the widget. */
+interface PacienteTreelan {
+  hc: string;
+  apellido: string;
+  nombre: string;
+  nombreCompleto: string;
+  dni: string;
+  fechaNacimiento: string;
+  domicilio: string;
+  estado: string;
+  procedencia: string;
+}
+
+interface BuscarPacienteResult {
+  encontrado: boolean;
+  cantidad: number;
+  pacientes: PacienteTreelan[];
+}
+
+/**
+ * Demo-only safety net for when the widget can't be reached. Mirrors the real
+ * Treelan record so the call keeps its shape; anything else is "not found"
+ * rather than a made-up patient.
+ */
+const DEMO_PACIENTE: PacienteTreelan = {
+  hc: "112708",
+  apellido: "DAPONTE",
+  nombre: "Cristobal",
+  nombreCompleto: "DAPONTE, Cristobal",
+  dni: "41172745",
+  fechaNacimiento: "04-05-1998",
+  domicilio: "cespedes 1244 1°B",
+  estado: "--",
+  procedencia: "Barrio",
+};
+
+function fallbackPaciente(dni: string): PacienteTreelan | null {
+  return dni === DEMO_PACIENTE.dni ? DEMO_PACIENTE : null;
+}
 
 /** Fields Treelan requires that the call didn't produce — surfaced to the agent. */
 function faltantes(p: TurnoPayload): string[] {

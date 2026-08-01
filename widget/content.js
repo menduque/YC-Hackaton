@@ -451,6 +451,28 @@
   try {
     if (globalThis.chrome && chrome.runtime && chrome.runtime.onMessage) {
       chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+        // Busqueda de paciente: solo lee. No navega la pestania ni monta el
+        // widget, asi el operador puede seguir donde estaba mientras el agente
+        // identifica a quien llama.
+        if (msg && msg.type === 'OIDO_BUSCAR_PACIENTE') {
+          const q = msg.payload || {};
+          R.buscarPaciente(q)
+            .then((result) => {
+              const linea = `Busqueda ${q.dni || q.apellido || ''}: ${result.cantidad} paciente/s`;
+              // log() no-opea hasta que existe un job; la consola siempre sirve.
+              console.log('[oido]', linea);
+              log(result.encontrado ? 'ok' : 'info', linea);
+              sendResponse({ ok: true, result });
+            })
+            .catch((e) => {
+              const err = (e && e.message) || String(e);
+              console.warn('[oido] busqueda de paciente fallo:', err);
+              log('err', `Busqueda de paciente fallo: ${err}`);
+              sendResponse({ ok: false, error: err });
+            });
+          return true; // respuesta asincrona
+        }
+
         if (!msg || msg.type !== 'OIDO_SCHEDULE') return false;
         montar(); // asegurar el widget montado antes de arrancar
         const res = arrancarCon(msg.payload, msg.lento, msg.origen || 'externo');
