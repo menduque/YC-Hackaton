@@ -75,7 +75,23 @@ function ensureBackendWS() {
   oidoWS.addEventListener('message', (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
-    if (msg && msg.type === 'OIDO_SCHEDULE') reenviarATreelan(msg, () => {});
+    if (!msg) return;
+    if (msg.type === 'OIDO_SCHEDULE') {
+      reenviarATreelan(msg, () => {});
+      return;
+    }
+    // Busqueda de paciente: a diferencia de OIDO_SCHEDULE, el backend espera la
+    // respuesta (decide que dice el agente a continuacion), asi que la devolvemos
+    // por el mismo WS correlacionada por id.
+    if (msg.type === 'OIDO_BUSCAR_PACIENTE') {
+      reenviarATreelan(msg, (res) => {
+        const r = res || { ok: false, error: 'sin respuesta del content script' };
+        try {
+          oidoWS.send(JSON.stringify({ type: 'OIDO_RESULT', id: msg.id, ...r }));
+        } catch {}
+      });
+      return;
+    }
     // 'pong' se ignora: su llegada ya mantuvo vivo al service worker.
   });
   oidoWS.addEventListener('close', () => {

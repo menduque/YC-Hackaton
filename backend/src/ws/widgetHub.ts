@@ -8,6 +8,18 @@ import type { OidoFieldMessage, OidoScheduleMessage } from "../types.js";
  */
 const byCallId = new Map<string, Set<WebSocket>>();
 
+/**
+ * In-flight requestWidget() calls, keyed by the id we put on the wire. The
+ * widget echoes that id back in { type:'OIDO_RESULT', id, ... }.
+ */
+interface Pending {
+  resolve: (v: any) => void;
+  reject: (e: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+const pending = new Map<string, Pending>();
+let seq = 0;
+
 export function registerWidgetHub(wss: WebSocketServer) {
   wss.on("connection", (ws, req) => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -21,8 +33,11 @@ export function registerWidgetHub(wss: WebSocketServer) {
     set.add(ws);
     console.log(`[widget-hub] connected callId=${callId} (${set.size} client/s)`);
 
-    // Keepalive: the extension's service worker sends {type:'ping'} every ~15s;
-    // replying keeps its MV3 idle-timer from sleeping mid-call.
+    // Two inbound messages:
+    // - {type:'ping'}: keepalive. The extension's service worker sends it every
+    //   ~15s; replying keeps its MV3 idle-timer from sleeping mid-call.
+    // - {type:'OIDO_RESULT', id, ok, result, error}: the reply to a
+    //   requestWidget() we sent earlier.
     ws.on("message", (data) => {
       let msg: any;
       try {
@@ -30,7 +45,13 @@ export function registerWidgetHub(wss: WebSocketServer) {
       } catch {
         return;
       }
-      if (msg?.type === "ping") ws.send(JSON.stringify({ type: "pong" }));
+      if (msg?.type === "ping") {
+        ws.send(JSON.stringify({ type: "pong" }));
+        return;
+      }
+      if (msg?.type === "OIDO_RESULT" && typeof msg.id === "string") {
+        settle(msg.id, msg);
+      }
     });
 
     ws.on("close", () => {
@@ -38,6 +59,47 @@ export function registerWidgetHub(wss: WebSocketServer) {
       if (set!.size === 0) byCallId.delete(callId);
     });
   });
+}
+
+/**
+ * Ask the widget to do something and wait for its answer.
+ *
+ * The other direction (pushSchedule) is fire-and-forget: it only reports how
+ * many sockets it reached. This one correlates an id so a handler can await a
+ * real result — which is what a patient lookup needs, since the answer decides
+ * what the agent says next.
+ */
+export function requestWidget<T = any>(
+  callId: string,
+  type: string,
+  payload: unknown,
+  timeoutMs = 8000,
+): Promise<T> {
+  const id = `req-${++seq}`;
+  const reached = broadcast(callId, { type, id, callId, payload });
+  if (reached === 0) {
+    // Fail now instead of burning the full timeout while the caller waits on
+    // the phone — there is nobody to answer.
+    return Promise.reject(
+      new Error("No Treelan widget connected — is the tab open and logged in?"),
+    );
+  }
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`Widget did not answer ${type} within ${timeoutMs}ms`));
+    }, timeoutMs);
+    pending.set(id, { resolve, reject, timer });
+  });
+}
+
+function settle(id: string, msg: any) {
+  const p = pending.get(id);
+  if (!p) return; // already timed out, or not ours
+  pending.delete(id);
+  clearTimeout(p.timer);
+  if (msg.ok === false) p.reject(new Error(msg.error || "Widget reported an error"));
+  else p.resolve(msg.result);
 }
 
 /** Push the full appointment payload to any widget connected on this callId. */
