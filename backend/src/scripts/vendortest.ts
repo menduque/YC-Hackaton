@@ -66,7 +66,9 @@ try {
   console.log(`  SKIP/FAIL: ${(err as Error).message}`);
 }
 
-heading("medplum write (Patient → Appointment → Task → Communication) — pass --write to run");
+// Note the `--`: `npm run vendortest --write` swallows the flag as an npm config
+// and silently skips this block.
+heading("medplum write (Patient → Appointment → Task → Communication) — `npm run vendortest -- --write`");
 if (process.argv.includes("--write")) {
   try {
     const { medplum } = await import("../clients/medplum.js");
@@ -128,7 +130,7 @@ if (process.argv.includes("--write")) {
     console.log(`  SKIP/FAIL: ${(err as Error).message}`);
   }
 } else {
-  console.log("  skipped (creates real resources) — rerun with --write");
+  console.log("  skipped (creates real resources) — rerun with: npm run vendortest -- --write");
 }
 
 heading("preparar_turno — slot outside the agenda (must be refused)");
