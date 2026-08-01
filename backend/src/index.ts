@@ -9,6 +9,7 @@ import { medplum } from "./clients/medplum.js";
 import { dispatchFunction } from "./functions/index.js";
 import { AGENT_FUNCTIONS } from "./deepgram/agentConfig.js";
 import { bridgeBrowserToDeepgram } from "./deepgram/bridge.js";
+import { agendaCompleta, normalizarFecha, reemplazarDia } from "./agenda/daponte.js";
 import type { TurnoPayload } from "./types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -27,6 +28,24 @@ app.get("/health", (_req, res) => {
 // The agent function schema, handy for the panel / debugging.
 app.get("/v1/agent/functions", (_req, res) => {
   res.json(AGENT_FUNCTIONS);
+});
+
+// Dr. Daponte's agenda — what the voice agent is allowed to offer.
+app.get("/v1/agenda", (req, res) => {
+  res.json(agendaCompleta(req.query.callId ? String(req.query.callId) : undefined));
+});
+
+// Override one day with what the widget read off the real Treelan grid:
+//   POST /v1/agenda/2026-09-28  { "slots": [{"hora":"09:00","estado":"libre"}, …] }
+// (`OidoRpa.leerSlots()` in the Treelan tab produces exactly this shape.)
+app.post("/v1/agenda/:fecha", (req, res) => {
+  const fecha = normalizarFecha(req.params.fecha);
+  const slots = (req.body as any)?.slots;
+  if (!fecha || !Array.isArray(slots)) {
+    res.status(400).json({ ok: false, error: "expected { slots: [{hora, estado}] }" });
+    return;
+  }
+  res.json({ ok: true, dia: reemplazarDia(fecha, slots) });
 });
 
 // Manual trigger for testing the widget without a live call:

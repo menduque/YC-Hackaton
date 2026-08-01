@@ -127,6 +127,35 @@ domain (for `externally_connectable` transport A) deploy to Vercel/Railway/ngrok
 
 ---
 
+## 7. Dr. Daponte's agenda (hardcoded)
+
+`backend/src/agenda/daponte.ts` is the only place the voice agent gets dates and
+times from. It holds **Dr. Franco Daponte's** identity (Treelan professional
+`e3244abc-…`, sede Montañeses) and his slot grid for the demo window:
+**September 26, 27, 28 and 29 — always 2026**. Whatever year the caller or the
+LLM says is coerced to 2026.
+
+- `buscar_disponibilidad` only ever returns times from this table. A day that
+  isn't in it comes back with the days that are, so the agent can't invent a slot
+  the Treelan RPA would choke on.
+- `preparar_turno` re-validates the slot before pushing anything to the widget: a
+  time that's taken, blocked or simply not in the grid is refused with the free
+  list, and the agent re-offers while the caller is still on the line.
+
+Refresh it against the live grid (~30s): with `turno.php` open for that day, run
+`copy(JSON.stringify(OidoRpa.leerSlots().map(s => ({hora:s.hora, estado:s.estado}))))`
+in the console, then
+
+```bash
+curl -X POST localhost:8787/v1/agenda/2026-09-28 \
+  -H 'content-type: application/json' -d '{"slots": <paste>}'
+```
+
+`GET /v1/agenda` prints the whole table. The override is in memory — paste it
+into `daponte.ts` to make it permanent.
+
+---
+
 ## Hard rule (non-negotiable, from the handoff §9.12)
 
 The demo **never** clicks `Aceptar`. The form is filled and stopped. Get Daponte's
