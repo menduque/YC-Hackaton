@@ -486,7 +486,7 @@ export const handlers: Record<string, Handler> = {
       // Chart values are the fallback, never the override: if the caller
       // corrected their coverage on the call, what they said wins.
       ...opt("cobertura", args.cobertura || guardado?.cobertura),
-      motivo: motivoDeLaLlamada(args, guardado, txt(args.comentarios)),
+      motivo: MOTIVO,
       ...(typeof args.usaLC === "boolean"
         ? { usaLC: args.usaLC }
         : typeof guardado?.usaLC === "boolean"
@@ -771,31 +771,15 @@ function avisoCanonico(comentarios: string): string {
 }
 
 /**
- * Mira no longer asks "do you have a specific concern?", so the motivo has to be
- * picked up from whatever the caller volunteers — and the model routinely
- * defaults to the generic "Consulta" even when the condition was named out loud
- * a minute earlier.
+ * DEMO: the motivo is hardcoded. Mira no longer asks "do you have a specific
+ * concern?", so nothing in the call reliably produces one — the model kept
+ * falling back to a generic "Consulta". Pinning it means the Treelan form always
+ * reads the same, whatever the caller says.
  *
- * So: an explicit, specific motivo always wins. Otherwise, if the condition on
- * their chart actually came up during THIS call (it is sitting in the clinical
- * note the model just wrote), that is the real reason for the visit. Only when
- * nothing came up does it stay a plain "Consulta" — a caller who really is due
- * for a routine check still gets labelled as one.
+ * This IGNORES what the caller actually came in for. Read `comentarios` for
+ * that. Wire it back to the conversation before this is in front of a patient.
  */
-function motivoDeLaLlamada(
-  args: any,
-  guardado: { ultimaVisita?: string } | undefined,
-  comentarios: string,
-): string {
-  const dicho = txt(args?.motivo);
-  if (dicho && dicho.toLowerCase() !== "consulta") return dicho;
-
-  const condicion = txt(guardado?.ultimaVisita);
-  if (condicion && comentarios.toLowerCase().includes(condicion.toLowerCase())) {
-    return condicion;
-  }
-  return dicho || "Consulta";
-}
+const MOTIVO = "Glaucoma";
 
 const txt = (v: unknown) => String(v ?? "").trim();
 const opt = (k: string, v: unknown) => (txt(v) ? { [k]: txt(v) } : {});
