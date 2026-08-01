@@ -131,6 +131,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch((e) => sendResponse({ ok: false, error: (e && e.message) || String(e) }));
     return true; // respuesta asincrona
   }
+  // Veredicto del RPA (content.js -> aca -> backend -> Task en MedPlum). Llega
+  // despues de una navegacion completa, asi que el SW pudo haberse dormido y
+  // perdido el WS: reconectar no serviria a tiempo, se pierde el reporte y el
+  // Task queda en 'requested', que es una lectura honesta de lo que paso.
+  if (msg && msg.type === 'OIDO_RPA_RESULT') {
+    ensureBackendWS();
+    try {
+      if (oidoWS && oidoWS.readyState === WebSocket.OPEN) oidoWS.send(JSON.stringify(msg));
+    } catch {}
+    sendResponse({ ok: true });
+    return false;
+  }
   return false;
 });
 ensureBackendWS(); // intento inicial al evaluar el service worker

@@ -244,24 +244,30 @@
    * llamada con el paciente (background -> onMessage). El origen del dato NO
    * cambia la maquina de estados: lo que se llena sale del payload y punto.
    */
-  function arrancarCon(payload, lento, origen) {
+  function arrancarCon(payload, lento, origen, medplum) {
     if (!payload || typeof payload !== 'object') {
-      job = { payload: PAYLOAD_DEFAULT, log: [], startedAt: Date.now(), phase: 'error' };
+      job = { payload: PAYLOAD_DEFAULT, medplum, log: [], startedAt: Date.now(), phase: 'error' };
       log('err', 'Payload ausente o invalido.');
+      avisarBackend(false, { error: 'payload invalido' });
       return { ok: false, error: 'payload invalido' };
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(payload.fecha || ''))) {
-      job = { payload, log: [], startedAt: Date.now(), phase: 'error' };
+      job = { payload, medplum, log: [], startedAt: Date.now(), phase: 'error' };
       log('err', 'Falta "fecha" en formato YYYY-MM-DD.');
+      avisarBackend(false, { error: 'fecha invalida' });
       return { ok: false, error: 'fecha invalida' };
     }
     if (!/^\d{1,2}:\d{2}$/.test(String(payload.hora || ''))) {
-      job = { payload, log: [], startedAt: Date.now(), phase: 'error' };
+      job = { payload, medplum, log: [], startedAt: Date.now(), phase: 'error' };
       log('err', 'Falta "hora" en formato HH:MM.');
+      avisarBackend(false, { error: 'hora invalida' });
       return { ok: false, error: 'hora invalida' };
     }
 
-    job = { payload, lento: Boolean(lento), log: [], startedAt: Date.now(), phase: 'calendario' };
+    // `medplum` trae los ids que la llamada ya persistio (Patient/Appointment/
+    // Task). Viaja dentro del job porque el RPA cruza una navegacion completa y
+    // el veredicto se manda recien al final, desde la otra pagina.
+    job = { payload, medplum, lento: Boolean(lento), log: [], startedAt: Date.now(), phase: 'calendario' };
     guardarJob(job);
 
     // Si el widget esta montado, reflejar el payload que llego de la llamada.
@@ -301,7 +307,33 @@
       job.phase = 'error';
       guardarJob(job);
     }
+    avisarBackend(false, { error: (err && err.message) || String(err) });
     corriendo(false);
+  }
+
+  /**
+   * Veredicto del RPA de vuelta al backend, que lo escribe como estado del Task
+   * en MedPlum. No es la respuesta de un requestWidget(): el llenado cruza una
+   * navegacion completa y tarda mucho mas que ese canal, asi que llega solo y se
+   * correlaciona por taskId.
+   *
+   * Se manda una sola vez por job — fase2 puede terminar bien y despues fallar
+   * algo del cierre, y el primer veredicto es el que vale.
+   */
+  function avisarBackend(ok, detalle) {
+    if (!job || job.avisado) return;
+    const taskId = job.medplum && job.medplum.taskId;
+    if (!taskId) return; // corrida a mano desde el textarea: no hay Task que cerrar
+    job.avisado = true;
+    guardarJob(job);
+    try {
+      chrome.runtime.sendMessage(
+        { type: 'OIDO_RPA_RESULT', taskId, ok, ...detalle },
+        () => void chrome.runtime.lastError,
+      );
+    } catch {
+      /* fuera de un content script: el RPA sigue andando, solo no reporta */
+    }
   }
 
   /** Fase 1 — calendarios.php: sede, profesional, mes, dia. Termina navegando. */
@@ -352,6 +384,7 @@
 
       job.phase = 'done';
       guardarJob(job);
+      avisarBackend(true, { cargados: res.cargados });
     } catch (err) {
       fallar(err);
     } finally {
@@ -532,7 +565,7 @@
 
         if (!msg || msg.type !== 'OIDO_SCHEDULE') return false;
         montar(); // asegurar el widget montado antes de arrancar
-        const res = arrancarCon(msg.payload, msg.lento, msg.origen || 'externo');
+        const res = arrancarCon(msg.payload, msg.lento, msg.origen || 'externo', msg.medplum);
         sendResponse(res);
         return false;
       });

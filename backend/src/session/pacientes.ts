@@ -12,10 +12,11 @@
  */
 
 export interface PacienteIdentificado {
-  hc: string;
+  /** Treelan chart number. Absent for a caller Treelan has never seen. */
+  hc?: string;
   apellido: string;
   nombre: string;
-  nombreCompleto: string;
+  nombreCompleto?: string;
   documento: string;
   tipoDoc: string;
   fechaNacimiento?: string;
@@ -23,15 +24,27 @@ export interface PacienteIdentificado {
   procedencia?: string;
   /** paciente.php?p_id=…&id=… — la ficha de donde se lee la historia clinica. */
   fichaUrl?: string;
+  /** MedPlum Patient id, filled in as soon as the mid-call upsert lands. */
+  patientId?: string;
 }
 
 const porLlamada = new Map<string, PacienteIdentificado>();
 
 export function recordar(callId: string, paciente: PacienteIdentificado) {
-  porLlamada.set(callId, paciente);
+  // Keep the MedPlum id across a re-identification: the caller correcting their
+  // surname is still the same Patient resource we already created.
+  const previo = porLlamada.get(callId);
+  porLlamada.set(callId, { ...(previo?.patientId ? { patientId: previo.patientId } : {}), ...paciente });
+  const quien = paciente.nombreCompleto ?? `${paciente.apellido}, ${paciente.nombre}`;
   console.log(
-    `[session] callId=${callId} identified as ${paciente.nombreCompleto} (HC ${paciente.hc})`,
+    `[session] callId=${callId} identified as ${quien}${paciente.hc ? ` (HC ${paciente.hc})` : " (new patient)"}`,
   );
+}
+
+/** Remember the MedPlum Patient the mid-call upsert produced. */
+export function recordarPatientId(callId: string, patientId: string) {
+  const paciente = porLlamada.get(callId);
+  if (paciente) paciente.patientId = patientId;
 }
 
 export function recordado(callId: string): PacienteIdentificado | undefined {

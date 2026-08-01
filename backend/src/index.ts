@@ -4,7 +4,7 @@ import { WebSocketServer } from "ws";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { config, vendorStatus } from "./config.js";
-import { registerWidgetHub, pushSchedule } from "./ws/widgetHub.js";
+import { registerWidgetHub, pushSchedule, setRpaResultHandler } from "./ws/widgetHub.js";
 import { medplum } from "./clients/medplum.js";
 import { dispatchFunction } from "./functions/index.js";
 import { AGENT_FUNCTIONS } from "./deepgram/agentConfig.js";
@@ -130,6 +130,22 @@ agentWss.on("connection", (ws, req) => {
   const callId = url.searchParams.get("callId") ?? "demo";
   console.log(`[agent] browser connected callId=${callId}`);
   bridgeBrowserToDeepgram(ws as any, callId);
+});
+
+// Close the loop: the widget reports what the RPA managed to do on the Treelan
+// page, and that becomes the status of the MedPlum Task the booking created. A
+// Task left at `requested` means nobody ever picked the job up.
+setRpaResultHandler(async ({ taskId, ok, cargados, error }) => {
+  if (!medplum.isConfigured) return;
+  await medplum.updateTaskStatus(
+    taskId,
+    ok ? "completed" : "failed",
+    ok
+      ? `Treelan form filled${cargados ? ` (${cargados} fields)` : ""}. NOT confirmed — ` +
+          "the front desk still has to press Aceptar."
+      : `RPA did not complete: ${error ?? "unknown error"}`,
+  );
+  console.log(`[medplum] Task/${taskId} status=${ok ? "completed" : "failed"}`);
 });
 
 server.on("upgrade", (req, socket, head) => {

@@ -98,6 +98,7 @@ async function call(name: string, body: unknown) {
 
 const ws = new WebSocket(`${BASE.replace("http", "ws")}/v1/voice/stream?callId=${CALL_ID}`);
 let schedule: any = null;
+let refs: any = null;
 
 ws.on("message", (data) => {
   const msg = JSON.parse(data.toString());
@@ -116,7 +117,18 @@ ws.on("message", (data) => {
     console.log(`  ← widget got OIDO_LEER_HISTORIA id=${msg.id}`, msg.payload);
     ws.send(JSON.stringify({ type: "OIDO_RESULT", id: msg.id, ok: true, result: HISTORIA }));
   }
-  if (msg.type === "OIDO_SCHEDULE") schedule = msg.payload;
+  if (msg.type === "OIDO_SCHEDULE") {
+    schedule = msg.payload;
+    refs = msg.medplum ?? null;
+    // Stand in for the real RPA finishing on the Treelan page: the widget reports
+    // back and the backend closes the MedPlum Task. Unsolicited and correlated by
+    // taskId, because the real fill crosses a full page navigation.
+    if (refs?.taskId) {
+      ws.send(
+        JSON.stringify({ type: "OIDO_RPA_RESULT", taskId: refs.taskId, ok: true, cargados: 11 }),
+      );
+    }
+  }
 });
 
 ws.on("open", async () => {
@@ -131,20 +143,34 @@ ws.on("open", async () => {
   console.log("\n3) buscar_paciente 30111222 (no match)");
   console.log(JSON.stringify(await call("buscar_paciente", { documento: "30111222" }), null, 2));
 
-  // Re-identify, then book without re-dictating anything.
-  await call("buscar_paciente", { documento: "41172745" });
+  // Re-identify and book immediately, WITHOUT awaiting the mid-call MedPlum
+  // upsert that identification kicks off. That overlap is the lost-update race:
+  // if the two Patient writes aren't serialized, the mobile number below gets
+  // silently dropped by whichever write lands second.
+  void call("buscar_paciente", { documento: "41172745" });
+  console.log("\n4) preparar_turno with NO patient object — filled from the lookup");
+  const turno: any = await call("preparar_turno", {
+    fecha: "2026-09-29",
+    hora: "12:00",
+    cobertura: "OSDE",
+    usaLC: false,
+    comentarios: "Blurry vision at distance for a month.",
+    // Only the call knows this — Treelan's chart doesn't have it. It must
+    // survive on the Patient no matter which upsert finishes last.
+    paciente: { celular: "11 5555-1234" },
+  });
+  console.log(`   delivered=${turno.result.delivered} faltantes=${JSON.stringify(turno.result.faltantes)}`);
+  console.log(`   medplum=${JSON.stringify(turno.result.medplum)}`);
 
-  // buscar_paciente dispara la lectura de la ficha sin esperarla; darle el
-  // respiro que en una llamada real se lo da el saludo del agente.
-  await new Promise((r) => setTimeout(r, 500));
-
-  console.log("\n4) obtener_contexto_paciente — resumen, sin decir el documento");
+  // Identifying the caller also kicks off the chart read, without awaiting it —
+  // by the time they ask something, it's parsed and indexed.
+  console.log("\n5) obtener_contexto_paciente — resumen, sin decir el documento");
   const ctx: any = await call("obtener_contexto_paciente", {});
   console.log(ctx.result.resumen);
 
   // El agente habla en ingles pero la historia esta en castellano, asi que
   // manda la pregunta traducida (ver agentConfig).
-  console.log('\n5) obtener_contexto_paciente — "qué me indicó el doctor por el golpe en el ojo"');
+  console.log('\n6) obtener_contexto_paciente — "qué me indicó el doctor por el golpe en el ojo"');
   const rag: any = await call("obtener_contexto_paciente", {
     consulta: "qué me indicó el doctor por el golpe en el ojo jugando al fútbol",
   });
@@ -152,19 +178,15 @@ ws.on("open", async () => {
     console.log(`   ${h.score.toFixed(3)} [${h.source ?? "?"}] ${h.text.replace(/\s+/g, " ").slice(0, 110)}…`);
   }
 
-  console.log("\n6) preparar_turno with NO patient object — filled from the lookup");
-  const turno: any = await call("preparar_turno", {
-    fecha: "2026-09-29",
-    hora: "12:00",
-    cobertura: "OSDE",
-    usaLC: false,
-    comentarios: "Blurry vision at distance for a month.",
-  });
-  console.log(`   delivered=${turno.result.delivered} faltantes=${JSON.stringify(turno.result.faltantes)}`);
-
-  await new Promise((r) => setTimeout(r, 300));
+  await new Promise((r) => setTimeout(r, 600));
   console.log("\n   OIDO_SCHEDULE payload the extension would fill into Treelan:");
   console.log(JSON.stringify(schedule, null, 2));
+  console.log(
+    "\n   MedPlum refs on that message:",
+    refs
+      ? JSON.stringify(refs)
+      : "none — MedPlum unconfigured or too slow, so the RPA got the locally built payload",
+  );
 
   ws.close();
   process.exit(0);

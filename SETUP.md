@@ -41,18 +41,41 @@ Wired in `backend/src/clients/medplum.ts`:
 
 - `getPatientContext(documento)` — searches `Patient` by identifier, pulls
   `Condition` + active `MedicationRequest`, returns a speakable summary.
-- `upsertPatient(paciente)` — creates the caller as a `Patient`, keyed on the
-  national id so a repeat call updates instead of duplicating. This is what
-  makes them appear in the **Patients** tab at app.medplum.com.
-- `writeAppointmentAndCommunication()` — writes the `Appointment` with status
-  **`proposed`** (never `booked` — the front desk still has to press Aceptar) plus
-  a `Communication` carrying the agent's clinical summary.
+- `upsertPatient(paciente, {patientId, hc})` — creates the caller as a `Patient`,
+  keyed on the national id so a repeat call updates instead of duplicating. This
+  is what makes them appear in the **Patients** tab at app.medplum.com. Every
+  field merges rather than overwrites, because it runs twice per call (see below).
+- `createAppointment()` — status **`proposed`**, never `booked`; the front desk
+  still has to press Aceptar.
+- `createBookingTask()` / `updateTaskStatus()` — the RPA job as a FHIR `Task`,
+  `requested` → `completed`/`failed` once the widget reports what happened on the
+  Treelan page. A Task left at `requested` means nobody picked the job up.
+- `createCommunication()` — the agent's one-line clinical summary.
+- `fhirPatientToTurno()` — projects the saved Patient back down to the shape the
+  Treelan RPA fills.
 
-`preparar_turno` calls both, in that order, so a completed call lands a Patient
-and an Appointment referencing it. The write is bounded at 6 s so a slow FHIR
-round-trip can't stall a live conversation, and it never throws — a MedPlum
-outage degrades to `{ ok: false }` in the function result instead of dropping
-the call.
+**MedPlum runs before the RPA, not after it.** Two write points:
+
+1. `buscar_paciente` upserts the Patient the moment the caller is identified,
+   fire-and-forget. A caller who gives their ID number and then hangs up still
+   leaves a record — and booking then updates a known id instead of searching.
+2. `preparar_turno` writes Patient → Appointment → Task, *then* rebuilds the
+   Treelan payload from the saved Patient and hands that to the widget.
+
+Step 2 is raced against **2.5 s**: if MedPlum is slow, down, or unconfigured, the
+locally built payload goes to the RPA anyway and the write finishes in the
+background. It never throws — an outage degrades to `{ ok: false }` in the
+function result instead of costing the caller their appointment.
+
+Patient writes are serialized per `callId`, since the fire-and-forget upsert from
+step 1 can otherwise still be in flight when step 2 starts and the later write
+silently drops the other's fields.
+
+Smoke-test the whole chain (note the `--`, or npm eats the flag):
+
+```bash
+cd backend && npm run vendortest -- --write
+```
 
 Still to do before the demo: seed a demo `Patient` with `Condition` +
 `MedicationRequest` matching DNI 30111222, so `getPatientContext` returns
