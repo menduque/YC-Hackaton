@@ -10,6 +10,7 @@ export interface TurnoPayload {
     nombre: string; // required
     tipoDoc: "DNI" | "LC" | "LE" | "PAS" | string; // default DNI
     documento: string;
+    fechaNacimiento?: string; // YYYY-MM-DD — only if volunteered; fills Patient.birthDate
     domicilio?: string;
     telefono?: string;
     celular?: string;

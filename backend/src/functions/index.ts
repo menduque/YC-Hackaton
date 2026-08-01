@@ -89,10 +89,16 @@ export const handlers: Record<string, Handler> = {
       dia: etiquetaDia(fecha),
       atiende: true,
       slots_libres: libres,
-      dias_disponibles: resumenDias(ctx.callId),
+      // Only OTHER days: listing this one again with a 3-slot preview next to
+      // the full list is what made the agent treat the preview as the whole
+      // day and refuse real slots.
+      otros_dias: resumenDias(ctx.callId).filter((d) => d.fecha !== fecha),
       instruccion:
-        "Read back two or three of slots_libres VERBATIM and let the caller pick one. " +
-        "Any time not in slots_libres does not exist in the doctor's agenda — never round to it.",
+        `slots_libres is the COMPLETE list of open times on ${etiquetaDia(fecha)} — ` +
+        `all ${libres.length} of them. Read back two or three VERBATIM so the caller has ` +
+        "a choice, but if they ask for any other time in slots_libres, accept it: " +
+        "the two or three you happened to mention are not the only ones available. " +
+        "Only a time absent from slots_libres does not exist — never round to it.",
     };
   },
 
@@ -260,10 +266,11 @@ export const handlers: Record<string, Handler> = {
         prepared: false,
         error: motivo,
         slots_libres: slotsLibres(fecha, "any", ctx.callId),
-        dias_disponibles: resumenDias(ctx.callId),
+        otros_dias: resumenDias(ctx.callId).filter((d) => d.fecha !== fecha),
         instruccion:
-          "Do NOT tell the caller it is booked. Offer a time from slots_libres " +
-          "(or another day from dias_disponibles) and call preparar_turno again.",
+          "Do NOT tell the caller it is booked. slots_libres is the complete list " +
+          `of open times on ${etiquetaDia(fecha)} — offer any of them (or a day from ` +
+          "otros_dias) and call preparar_turno again.",
       };
     }
 
@@ -305,12 +312,20 @@ export const handlers: Record<string, Handler> = {
       callId: ctx.callId,
       payload,
     });
+
+    // Record the caller in MedPlum: the Patient first (that's what shows up in
+    // the Patients tab), then the Appointment hanging off it — `proposed`, never
+    // `booked`. Bounded so a slow FHIR write can't stall the conversation; if it
+    // overruns, the write still lands, we just stop waiting on it.
+    const fhir = await withTimeout(recordInMedplum(payload, ctx.callId), 6000);
+
     // Demo-friendly: the appointment is "prepared" in the system regardless of
     // whether the Treelan widget is currently connected.
     return {
       ok: true,
       prepared: true,
       delivered,
+      medplum: fhir,
       turno: {
         doctor: DOCTOR.display,
         sede: DOCTOR.sede,
@@ -328,6 +343,43 @@ export const handlers: Record<string, Handler> = {
     };
   },
 };
+
+/**
+ * Patient + Appointment (+ Communication) in MedPlum. Never throws — a vendor
+ * outage must not take down a live call, so failures are logged and reported
+ * back to the agent as `{ ok: false }`.
+ */
+async function recordInMedplum(turno: TurnoPayload, callId: string) {
+  if (!medplum.isConfigured) return { ok: false, reason: "MedPlum not configured" };
+  try {
+    const patient = await medplum.upsertPatient(turno.paciente);
+    console.log(
+      `[medplum] Patient/${patient.id} ${turno.paciente.apellido}, ${turno.paciente.nombre} (doc ${turno.paciente.documento})`,
+    );
+
+    const { appointmentId } = await medplum.writeAppointmentAndCommunication({
+      turno,
+      patientId: patient.id,
+      callId,
+    });
+    console.log(`[medplum] Appointment/${appointmentId} status=proposed`);
+
+    return { ok: true, patientId: patient.id, appointmentId };
+  } catch (err) {
+    console.error("[medplum] write failed:", (err as Error).message);
+    return { ok: false, reason: (err as Error).message };
+  }
+}
+
+/** Resolve with a marker instead of hanging the agent's function call forever. */
+function withTimeout<T>(p: Promise<T>, ms: number) {
+  return Promise.race([
+    p,
+    new Promise<{ ok: false; reason: string }>((resolve) =>
+      setTimeout(() => resolve({ ok: false, reason: "still writing" }), ms).unref(),
+    ),
+  ]);
+}
 
 const txt = (v: unknown) => String(v ?? "").trim();
 const opt = (k: string, v: unknown) => (txt(v) ? { [k]: txt(v) } : {});

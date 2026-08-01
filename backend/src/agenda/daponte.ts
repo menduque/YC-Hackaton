@@ -280,7 +280,16 @@ export function liberar(fecha: string, hora: string): void {
   reservados.delete(clave(fecha, hora));
 }
 
-/** Compact summary of the whole window — what the agent offers when a day is closed. */
+/**
+ * Compact summary of the whole window — what the agent offers when a day is closed.
+ *
+ * The sample is named `ejemplos_no_exhaustivos` on purpose. It used to be
+ * `primeros`, and the LLM read those three times as the day's complete
+ * availability: asked for 12:00 on a day with 13 free slots it answered "12:00
+ * is not available" and offered only the three it had seen. Never widen this to
+ * the full list either — that is what `slotsLibres` is for; this is a preview to
+ * help the caller pick a DAY.
+ */
 export function resumenDias(callId?: string) {
   return diasAbiertos().map((fecha) => {
     const libres = slotsLibres(fecha, "any", callId);
@@ -288,7 +297,7 @@ export function resumenDias(callId?: string) {
       fecha,
       dia: etiquetaDia(fecha),
       libres: libres.length,
-      primeros: libres.slice(0, 3),
+      ejemplos_no_exhaustivos: libres.slice(0, 3),
     };
   });
 }
