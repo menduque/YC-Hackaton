@@ -1,113 +1,86 @@
-# YC Hackathon — Stedi × Medplum × Moss
+# Oído — Agendamiento por voz (voz → FHIR/EDI → EHR)
 
-A working eligibility-check demo: run an X12 270/271 real-time eligibility check
-through [Stedi](https://www.stedi.com) test mode, render the benefits, and persist
-the result as FHIR in [Medplum](https://www.medplum.com)'s hosted cloud.
+Voice-first medical intake for a hackathon. A patient talks to a Deepgram voice
+agent; the conversation becomes clinical documentation (MedPlum FHIR), coverage
+is checked (Stedi 270/271), history is grounded (Moss RAG), and the appointment
+is loaded into the Treelan EHR by an already-built RPA widget — **stopping right
+before "Aceptar".**
 
-Everything Stedi-side runs in **test mode**: synthetic payers and patients, no PHI/PII,
-nothing reaches a real payer, and no charges.
+The full architecture and data contract live in
+[`docs/HANDOFF-NUEVO-REPO.md`](docs/HANDOFF-NUEVO-REPO.md). Read that first.
 
 ## Layout
 
+```
+backend/   Node + TypeScript. Deepgram voice-agent config, function handlers,
+           vendor clients (MedPlum / Stedi / Moss), WS "pull" transport to the widget.
+widget/    the already-built Chrome extension RPA.
+panel/     the call UI (mic + live function-call log).
+app/       Vite + React SPA — the Stedi eligibility bench, used to develop and
+           eyeball the 270/271 flow outside the voice loop.
+docs/      the handoff spec.
+vendor/    Medplum monorepo, vendored (see vendor/README.md).
+```
+
 | Path | What it is |
 | --- | --- |
-| `app/` | Vite + React + Mantine SPA, wired to Medplum's hosted FHIR API |
+| `backend/src/clients/stedi.ts` | Eligibility 270/271 — payer-name → mock fixture, test mode only |
+| `backend/src/clients/moss.ts` | Semantic retrieval over indexed context |
+| `backend/src/clients/medplum.ts` | FHIR read (patient context) + write (`Appointment`, `Communication`) |
 | `app/src/stedi/mock-requests.ts` | All 34 Stedi mock requests, extracted from their docs and verified live |
-| `app/src/stedi/client.ts` | Browser-side eligibility client (talks to the dev proxy) |
-| `app/src/stedi/to-fhir.ts` | 271 response → FHIR `Patient` / `Coverage` / `CoverageEligibilityResponse` |
-| `app/src/moss/client.ts` | Benefits → Moss documents, plus the browser-side search calls |
-| `app/vite.config.ts` | Dev-only server: Stedi proxy (keeps the key off the client) + Moss endpoints |
-| `scripts/stedi-eligibility.mjs` | CLI runner for any mock request |
-| `scripts/medplum-project-init.mjs` | Provisions a Medplum project via the `Project/$init` operation |
-| `vendor/medplum` | The Medplum monorepo, vendored and committed (Apache-2.0, pinned to `59c344c`) |
+| `app/src/stedi/to-fhir.ts` | 271 response → `Patient` / `Coverage` / `CoverageEligibilityResponse` |
+| `scripts/stedi-eligibility.mjs` | Run any mock eligibility request from the CLI |
+| `scripts/medplum-project-init.mjs` | Provision a Medplum project via `Project/$init` |
 | `medplum-link` | Relative symlink to `vendor/medplum` — the layout Medplum recommends for AI assistants |
 
-## Setup
+## Quickstart — talk to the agent
 
 ```bash
-cp .env.example .env          # Stedi test key (server-side)
-cp app/.env.example app/.env  # Medplum + Moss (public, VITE_-prefixed)
-cd app && npm install
+cp .env.example .env       # DEEPGRAM_API_KEY required; vendors optional
+cd backend && npm install && npm run dev
 ```
 
-**Secrets rule:** the Stedi API key lives in the repo-root `.env` and is only ever read by
-Node (the Vite dev middleware and `scripts/`). Anything in `app/.env` is `VITE_`-prefixed
-and ships to the browser — never put the Stedi key there.
+Then open **http://localhost:8787/** and click **Iniciar llamada**. Use
+**headphones** (otherwise the mic hears the agent's own voice). The agent greets
+you in Argentine Spanish and runs the receptionist script; its function calls
+show in the right panel.
 
-### Stedi
+- Voice pipeline: browser mic → backend → Deepgram Voice Agent (`nova-3` es STT +
+  `gpt-4o-mini` LLM + `aura-2-antonia-es` TTS) → back to the browser.
+- Sanity-check the Deepgram connection alone: `npx tsx src/scripts/dgtest.ts`.
 
-A test API key is already generated for the `Oido AI` account. To make your own:
-[API keys](https://portal.stedi.com/app/settings/developer/api-keys) → **Generate new API
-Key** → Mode **Test**. Test keys only work with the mock requests in
-`app/src/stedi/mock-requests.ts`.
+The server boots without the other keys and reports which vendors are
+unconfigured, so you wire them one at a time. Per-vendor steps: [`SETUP.md`](SETUP.md).
 
-### Medplum
+## Vendor status
 
-Already configured: project **test** (`71bf21cb-c741-4290-b2f0-fef2b53e121e`), from
-**Admin → Project → Details** at [app.medplum.com](https://app.medplum.com).
+| Vendor | Function it backs | State |
+| --- | --- | --- |
+| Deepgram | the conversation itself | wired |
+| Stedi | `verificar_cobertura` | wired — test mode, 34/34 fixtures verified live |
+| Moss | `investigar_problema`, `obtener_contexto_paciente` | wired — ~1 ms queries |
+| MedPlum | `obtener_contexto_paciente`, post-call write | wired — read + write |
 
-**No Client ID is needed.** `<SignInForm projectId={...}>` does project-scoped
-email/password login; the server only looks up a `ClientApplication` when a `clientId` is
-actually sent (`packages/server/src/auth/login.ts`). Create one under **Admin → Project →
-Clients** only if you switch to an OAuth/SMART flow, and set `VITE_MEDPLUM_CLIENT_ID` then.
+### Stedi — test mode only
 
-Sign in with your normal Medplum email and password. The eligibility demo runs without
-signing in — Medplum only gates the "Save as FHIR" step.
+Everything Stedi-side is **test mode**: synthetic payers and patients, no PHI/PII,
+nothing reaches a real payer, no charges. The backend refuses to start a check with a
+key that doesn't begin with `test_`.
 
-#### Medplum CLI + provisioning projects
+Stedi is a US clearinghouse and this is an Argentine clinic, so
+`backend/src/clients/stedi.ts` maps a local payer name (OSDE, Swiss Medical, …) onto a
+Stedi mock fixture. That keeps the 270/271 round-trip real while the payer identity is
+stand-in. `STEDI_TEST_PAYER_ID` sets the fallback for unmapped names.
 
-`@medplum/cli` is a repo-root devDependency, so `npx medplum ...` works from here.
+Subscriber and dependent values must match Stedi's fixtures **exactly** — any other
+name, DOB, or member ID returns an AAA error. Provider name and NPI are free-form
+(the NPI just has to pass check-digit validation).
 
 ```bash
-npx medplum login                 # once — opens a browser, stores creds in ~/.medplum
-npx medplum whoami
-npx medplum project list
-npx medplum get 'Patient?_count=5'
+npm run stedi -- --list          # all 34 fixtures
+npm run stedi -- aetna           # active coverage, copays, deductibles
+npm run stedi -- aaa-73 --raw    # a payer rejection, full response
 ```
-
-To provision a **new** project from code instead of the web UI, use the
-[`Project/$init`](https://www.medplum.com/docs/api/fhir/operations/project-init) operation:
-
-```bash
-npm run project:init -- "Oido AI"              # create it
-npm run project:init -- "Oido AI" --write-env  # ...and point app/.env at it
-npx medplum project switch <projectId>         # move the CLI to it
-```
-
-`$init` creates the Project, a `ClientApplication`, and your `ProjectMembership` in one
-call; it returns only the Project. Any authenticated user can call it, and the owner
-defaults to the User on your access token.
-
-Note there is no `medplum init` command — the CLI's `project` subcommands are
-`list`, `current`, `switch`, and `invite`. Provisioning is the `$init` operation above.
-
-### Moss
-
-Already configured. Note that `@moss-dev/moss` depends on `@moss-dev/moss-core`, which
-ships **native Node addons**, not browser WASM — so Moss runs in the dev server behind
-`/api/moss/index` and `/api/moss/query`, reading `MOSS_*` from the repo-root `.env`.
-
-In the demo: run a check, click **Index N benefit lines**, then ask questions in plain
-English. A payer's 271 is hundreds of coded rows; each becomes one searchable sentence.
-Queries come back in ~1 ms.
-
-## Run
-
-```bash
-cd app && npm run dev
-```
-
-Or from the CLI, without the browser:
-
-```bash
-node scripts/stedi-eligibility.mjs --list
-node scripts/stedi-eligibility.mjs aetna
-node scripts/stedi-eligibility.mjs aaa-73 --raw
-```
-
-## Mock request catalogue
-
-34 requests across seven categories, all verified against the live test API:
 
 | Category | Count | Examples |
 | --- | --- | --- |
@@ -119,16 +92,59 @@ node scripts/stedi-eligibility.mjs aaa-73 --raw
 | `mbi-lookup` | 1 | `cms-mbi-lookup` |
 | `stedi-agent` | 1 | `stedi-agent` (designed to fail with AAA 73) |
 
-Subscriber and dependent values must match Stedi's fixtures **exactly** — any other name,
-DOB, or member ID returns an AAA error. Provider name and NPI are free-form (the NPI just
-has to pass check-digit validation).
+### MedPlum
+
+Project **test** (`71bf21cb-c741-4290-b2f0-fef2b53e121e`), from **Admin → Project →
+Details** at [app.medplum.com](https://app.medplum.com).
+
+The backend authenticates headlessly with **client credentials**, so it needs
+`MEDPLUM_CLIENT_ID` / `MEDPLUM_CLIENT_SECRET` from **Admin → Project → Clients**. (The
+`app/` SPA is different — it uses `<SignInForm projectId>` email/password login and needs
+no client ID at all.)
+
+`@medplum/cli` is a repo-root devDependency:
+
+```bash
+npx medplum login                 # once — opens a browser, stores creds in ~/.medplum
+npx medplum project list
+npm run project:init -- "Oído"    # provision a new project via Project/$init
+```
+
+There is no `medplum init` command — `medplum project` only has `list`, `current`,
+`switch`, `invite`. Provisioning is the `$init` operation.
+
+### Moss
+
+`@moss-dev/moss` depends on `@moss-dev/moss-core`, which ships **native Node addons**,
+not browser WASM — so it only runs server-side. `loadIndex()` pulls the index into memory
+and queries then run locally in ~1 ms instead of a cloud round-trip.
+
+## The eligibility bench (`app/`)
+
+A React SPA for developing the 270/271 flow without going through the voice loop: pick a
+fixture, run the check, read the benefits table, semantic-search the response, and persist
+it as FHIR.
+
+```bash
+cd app && npm install && npm run dev
+```
+
+Its `vite.config.ts` carries dev-only `/api/stedi/*` and `/api/moss/*` middleware so the
+keys stay server-side. That's a development convenience — the voice path goes through
+`backend/`, not through Vite.
+
+## Order of build (from the handoff §10)
+
+1. Widget RPA with a hand-pasted payload — the safety net (already done).
+2. Deepgram voice agent + browser mic → `preparar_turno` → widget. (done)
+3. Moss + MedPlum **read** to personalize the conversation. (done)
+4. Stedi coverage badge before touching `turno_deudor`. (done)
+5. MedPlum **write** (`Appointment` + `Communication`) after the fill. (done)
+6. (stretch) per-field streaming so the form fills as the patient speaks.
 
 ## Notes / limits
 
-- The Stedi account is a **sandbox**, so test claims and the Stedi MCP server are
-  unavailable (both need a production account). Real-time eligibility checks — what this
-  demo uses — work fully.
-- `app/vite.config.ts`'s proxy is dev-only. For production, move it behind a real backend
-  or a [Medplum Bot](https://www.medplum.com/docs/bots).
-- `build.cssMinify` is off to work around an unresolved `$mantine-breakpoint-xs` variable
-  in `@medplum/react@5.1.27`'s shipped CSS. Remove once Medplum fixes it.
+- The Stedi account is a **sandbox**: test claims and the Stedi MCP server need a
+  production account. Real-time eligibility checks work fully.
+- `build.cssMinify` is off in `app/` to work around an unresolved
+  `$mantine-breakpoint-xs` variable in `@medplum/react@5.1.27`'s shipped CSS.

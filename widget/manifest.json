@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Oido — Widget de demo (turnos Treelan)",
+  "version": "1.1.0",
+  "description": "MODO DEMO: ejecuta el RPA de agendamiento en Treelan con el payload que surge de la llamada con el paciente. Nunca confirma el turno.",
+  "host_permissions": [
+    "https://daponteojos.selfip.com/treelan/*",
+    "http://localhost:8787/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "externally_connectable": {
+    "matches": ["https://oido-control.example.com/*"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://daponteojos.selfip.com/treelan/*"],
+      "js": ["rpa.js", "content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

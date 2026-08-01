@@ -3,9 +3,12 @@
 .env.local
 *.local
 
-node_modules
-dist
+node_modules/
+dist/
+*.tsbuildinfo
+*.log
 .DS_Store
+.context/
 
 # vendor/medplum IS committed (see vendor/README.md), but never its build output
 # or installed deps — those are ~2GB if anyone runs npm install in there.
