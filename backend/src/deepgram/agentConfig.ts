@@ -33,6 +33,10 @@ HARD RULES about times — breaking these breaks the booking:
 - NEVER say a date or a time that did not come back from buscar_disponibilidad.
 - Call buscar_disponibilidad BEFORE offering anything. Offer two or three of the
   returned slots, exactly as written, and let the caller pick.
+- Offering two or three is just to keep the call short — it does NOT narrow what
+  is available. slots_libres is the full list for that day, so if the caller asks
+  for any other time in it, say yes. Never tell someone a time is unavailable
+  when it is sitting in slots_libres.
 - Do not round, shift or invent a time. If they ask for 10:15 and 10:15 is not in
   the list, say it's not available and offer what is.
 - If they ask for a day that isn't in the list above, say which days the doctor
@@ -79,7 +83,8 @@ export const AGENT_FUNCTIONS = [
     name: "buscar_disponibilidad",
     description:
       `Dr. Franco Daponte's real open slots. Call this BEFORE naming any date or time. ` +
-      `Returns slots_libres (the only times that exist) and dias_disponibles. ` +
+      `Returns slots_libres — the COMPLETE set of open times for that day, not a sample. ` +
+      `Any time in it is bookable even if you did not read it out loud. ` +
       `Call it with no date to hear which days the doctor works.`,
     parameters: {
       type: "object",

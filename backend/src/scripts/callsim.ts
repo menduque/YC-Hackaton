@@ -36,9 +36,11 @@ const CALLER_LINES = [
   "My name is Juan Perez, my I D number is 3 0 1 2 3 4 5 6, " +
     "I have OSDE insurance, and no, I do not wear contact lenses.",
   "September twenty ninth, twenty twenty six.",
-  // Deliberately vague: takes whatever the agent just offered, so the script
-  // doesn't fail merely because the agenda changed underneath it.
-  "The first time you mentioned works great, let's do that one.",
+  // Default asks for noon on purpose: it is free in the agenda but is NOT one
+  // of the three the agent reads out, so it regression-tests the bug where the
+  // agent treated the times it happened to mention as the only ones available.
+  // --pedir "the first time you mentioned" to just take what it offers.
+  arg("pedir", "Twelve o'clock works great, thank you."),
   "No, that is everything. Thank you very much.",
 ];
 
@@ -209,9 +211,12 @@ function finish() {
   process.exit(widgetGot ? 0 : 1);
 }
 
+// Generous: the agent collects insurance, contact lenses and a clinical summary,
+// and often reads the whole chart back before it calls preparar_turno.
+const BUDGET_MS = Number(arg("budget", "180")) * 1000;
 setTimeout(() => {
   try {
     ws.close();
   } catch {}
   finish();
-}, 90_000);
+}, BUDGET_MS);
