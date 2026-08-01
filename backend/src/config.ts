@@ -1,4 +1,14 @@
-import "dotenv/config";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+import dotenv from "dotenv";
+
+// `dotenv/config` only looks at process.cwd(), which is backend/ under
+// `npm run dev`. Load backend/.env first (it wins), then fall back to the
+// repo-root .env so scripts/, the app's Vite middleware and this server can all
+// share one file.
+const here = dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: resolve(here, "../.env") });
+dotenv.config({ path: resolve(here, "../../.env") });
 
 /** One place that reads env. Nothing here throws — missing keys are reported, not fatal. */
 export const config = {

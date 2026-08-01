@@ -6,7 +6,7 @@ import type {
   Patient,
 } from '@medplum/fhirtypes'
 import type { EligibilityRequest } from './mock-requests'
-import type { BenefitInformation, EligibilityResponse } from './client'
+import type { BenefitInformation, EligibilityResponse } from './types'
 
 /** Stedi returns `YYYYMMDD`; FHIR wants `YYYY-MM-DD`. */
 function toFhirDate(yyyymmdd?: string): string | undefined {

@@ -1,4 +1,5 @@
-import type { BenefitInformation, EligibilityResponse } from '../stedi/client'
+import { describeBenefit } from '../../../shared/stedi/types'
+import type { EligibilityResponse } from '../../../shared/stedi/types'
 
 /**
  * Moss (https://moss.dev) — hybrid semantic search with sub-10ms queries.
@@ -34,21 +35,6 @@ export function benefitsToDocuments(response: EligibilityResponse): MossDoc[] {
       amount: b.benefitAmount ?? '',
     },
   }))
-}
-
-function describeBenefit(b: BenefitInformation): string {
-  const parts = [b.name ?? 'Benefit']
-  if (b.benefitAmount) parts.push(`$${b.benefitAmount}`)
-  if (b.benefitPercent) parts.push(`${Number.parseFloat(b.benefitPercent) * 100}%`)
-  if (b.serviceTypes?.length) parts.push(`for ${b.serviceTypes.join(', ')}`)
-  if (b.inPlanNetworkIndicator) parts.push(`in-network: ${b.inPlanNetworkIndicator}`)
-  if (b.coverageLevel) parts.push(`coverage level: ${b.coverageLevel}`)
-  if (b.timeQualifier) parts.push(`period: ${b.timeQualifier}`)
-  if (b.insuranceType) parts.push(`plan: ${b.insuranceType}`)
-  for (const info of b.additionalInformation ?? []) {
-    if (info.description) parts.push(info.description)
-  }
-  return parts.join(' · ')
 }
 
 /** Builds (or rebuilds) a Moss index for one eligibility response. */

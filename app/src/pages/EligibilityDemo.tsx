@@ -14,7 +14,7 @@ import {
   Title,
 } from '@mantine/core'
 import { useMedplum, useMedplumProfile } from '@medplum/react-hooks'
-import { MOCK_REQUESTS, getMockRequest } from '../stedi/mock-requests'
+import { MOCK_REQUESTS, getMockRequest } from '../../../shared/stedi/mock-requests'
 import {
   activeCoverage,
   checkEligibility,
@@ -22,7 +22,7 @@ import {
   patientResponsibility,
   type EligibilityResponse,
 } from '../stedi/client'
-import { eligibilityToFhir } from '../stedi/to-fhir'
+import { eligibilityToFhir } from '../../../shared/stedi/to-fhir'
 import { benefitsToDocuments, indexBenefits, queryBenefits, type MossHit } from '../moss/client'
 
 const CATEGORY_LABELS: Record<string, string> = {

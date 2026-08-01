@@ -26,7 +26,7 @@ function loadEnv() {
 loadEnv();
 
 const { MOCK_REQUESTS, getMockRequest, STEDI_ELIGIBILITY_ENDPOINT } = await import(
-  path.join(root, 'app/src/stedi/mock-requests.ts')
+  path.join(root, 'shared/stedi/mock-requests.ts')
 );
 
 const args = process.argv.slice(2);
