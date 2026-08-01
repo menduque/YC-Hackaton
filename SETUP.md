@@ -41,9 +41,18 @@ Wired in `backend/src/clients/medplum.ts`:
 
 - `getPatientContext(documento)` — searches `Patient` by identifier, pulls
   `Condition` + active `MedicationRequest`, returns a speakable summary.
+- `upsertPatient(paciente)` — creates the caller as a `Patient`, keyed on the
+  national id so a repeat call updates instead of duplicating. This is what
+  makes them appear in the **Patients** tab at app.medplum.com.
 - `writeAppointmentAndCommunication()` — writes the `Appointment` with status
   **`proposed`** (never `booked` — the front desk still has to press Aceptar) plus
   a `Communication` carrying the agent's clinical summary.
+
+`preparar_turno` calls both, in that order, so a completed call lands a Patient
+and an Appointment referencing it. The write is bounded at 6 s so a slow FHIR
+round-trip can't stall a live conversation, and it never throws — a MedPlum
+outage degrades to `{ ok: false }` in the function result instead of dropping
+the call.
 
 Still to do before the demo: seed a demo `Patient` with `Condition` +
 `MedicationRequest` matching DNI 30111222, so `getPatientContext` returns
