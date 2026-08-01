@@ -37,6 +37,11 @@
     .fn b { color: #ffd479; }
     pre { margin: 6px 0 0; font-size: 11px; color: #9fb0c9; white-space: pre-wrap; word-break: break-word; }
     .hint { color: #6b7488; font-size: 12px; margin-top: 8px; }
+    .pac { background: #14261b; border: 1px solid #2b4a37; border-radius: 8px;
+      padding: 10px 12px; margin-bottom: 18px; }
+    .pac.nuevo { background: #262014; border-color: #4a3d2b; }
+    .pac .nom { font-size: 15px; font-weight: 600; margin: 2px 0 4px; }
+    .pac .meta { font-size: 11px; color: #8b93a7; }
   </style>
 </head>
 <body>
@@ -54,6 +59,7 @@
   </main>
 
   <aside>
+    <div id="paciente"></div>
     <h2>Function calls</h2>
     <div id="fns"><p class="hint">Las llamadas a herramientas del agente aparecen acá.</p></div>
   </aside>
