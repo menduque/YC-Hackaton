@@ -72,12 +72,20 @@ export const handlers: Record<string, Handler> = {
       callId: ctx.callId,
       payload: args,
     });
+
+    // Record the caller in MedPlum: the Patient first (that's what shows up in
+    // the Patients tab), then the Appointment hanging off it — `proposed`, never
+    // `booked`. Bounded so a slow FHIR write can't stall the conversation; if it
+    // overruns, the write still lands, we just stop waiting on it.
+    const fhir = await withTimeout(recordInMedplum(args, ctx.callId), 6000);
+
     // Demo-friendly: the appointment is "prepared" in the system regardless of
     // whether the Treelan widget is currently connected.
     return {
       ok: true,
       prepared: true,
       delivered,
+      medplum: fhir,
       note:
         delivered > 0
           ? "Appointment loaded into the EHR — ready for the front desk to confirm."
@@ -85,6 +93,43 @@ export const handlers: Record<string, Handler> = {
     };
   },
 };
+
+/**
+ * Patient + Appointment (+ Communication) in MedPlum. Never throws — a vendor
+ * outage must not take down a live call, so failures are logged and reported
+ * back to the agent as `{ ok: false }`.
+ */
+async function recordInMedplum(turno: TurnoPayload, callId: string) {
+  if (!medplum.isConfigured) return { ok: false, reason: "MedPlum not configured" };
+  try {
+    const patient = await medplum.upsertPatient(turno.paciente);
+    console.log(
+      `[medplum] Patient/${patient.id} ${turno.paciente.apellido}, ${turno.paciente.nombre} (doc ${turno.paciente.documento})`,
+    );
+
+    const { appointmentId } = await medplum.writeAppointmentAndCommunication({
+      turno,
+      patientId: patient.id,
+      callId,
+    });
+    console.log(`[medplum] Appointment/${appointmentId} status=proposed`);
+
+    return { ok: true, patientId: patient.id, appointmentId };
+  } catch (err) {
+    console.error("[medplum] write failed:", (err as Error).message);
+    return { ok: false, reason: (err as Error).message };
+  }
+}
+
+/** Resolve with a marker instead of hanging the agent's function call forever. */
+function withTimeout<T>(p: Promise<T>, ms: number) {
+  return Promise.race([
+    p,
+    new Promise<{ ok: false; reason: string }>((resolve) =>
+      setTimeout(() => resolve({ ok: false, reason: "still writing" }), ms).unref(),
+    ),
+  ]);
+}
 
 export async function dispatchFunction(
   name: string,

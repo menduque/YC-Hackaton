@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { config, vendorStatus } from "./config.js";
 import { registerWidgetHub, pushSchedule } from "./ws/widgetHub.js";
+import { medplum } from "./clients/medplum.js";
 import { dispatchFunction } from "./functions/index.js";
 import { AGENT_FUNCTIONS } from "./deepgram/agentConfig.js";
 import { bridgeBrowserToDeepgram } from "./deepgram/bridge.js";
@@ -87,6 +88,13 @@ server.listen(config.port, () => {
   console.log(`  vendors ready:  ${fmt(v)}\n`);
   const missing = Object.entries(v).filter(([, ok]) => !ok).map(([k]) => k);
   if (missing.length) console.log(`  waiting on keys for: ${missing.join(", ")}  (see SETUP.md)\n`);
+
+  // Log in to MedPlum now, so the first `preparar_turno` of a live call isn't
+  // also paying for the client-credentials round-trip.
+  medplum
+    .warmUp()
+    .then(() => v.medplum && console.log(`  medplum:        signed in, project ${config.medplum.projectId}\n`))
+    .catch((err) => console.error(`  medplum:        sign-in FAILED — ${err.message}\n`));
 });
 
 function fmt(v: Record<string, boolean>) {
