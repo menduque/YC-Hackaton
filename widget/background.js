@@ -52,7 +52,11 @@ chrome.runtime.onMessageExternal.addListener((msg, _sender, sendResponse) => {
 // { type:'OIDO_SCHEDULE', payload } por este WS (keyed por callId). El SW lo
 // reenvia a la pestania de Treelan. Corre en contexto chrome-extension:// asi
 // que no lo frena el mixed-content de la pagina HTTPS ni la CSP de Treelan.
-const OIDO_BACKEND_WS = 'ws://localhost:8787/v1/voice/stream?callId=demo';
+// Puerto del backend de esta copia del repo. Cada workspace de Conductor corre
+// en el suyo (8787, 8788, 8789…): si cambias el PORT del .env, cambialo aca y
+// agregalo a manifest.host_permissions, si no el SW no puede abrir el WS.
+const OIDO_BACKEND_PORT = 8789;
+const OIDO_BACKEND_WS = `ws://localhost:${OIDO_BACKEND_PORT}/v1/voice/stream?callId=demo`;
 let oidoWS = null;
 let oidoPing = null;
 

@@ -33,6 +33,10 @@ HARD RULES about times — breaking these breaks the booking:
 - NEVER say a date or a time that did not come back from buscar_disponibilidad.
 - Call buscar_disponibilidad BEFORE offering anything. Offer two or three of the
   returned slots, exactly as written, and let the caller pick.
+- Offering two or three is just to keep the call short — it does NOT narrow what
+  is available. slots_libres is the full list for that day, so if the caller asks
+  for any other time in it, say yes. Never tell someone a time is unavailable
+  when it is sitting in slots_libres.
 - Do not round, shift or invent a time. If they ask for 10:15 and 10:15 is not in
   the list, say it's not available and offer what is.
 - If they ask for a day that isn't in the list above, say which days the doctor
@@ -56,12 +60,21 @@ they don't, move on.
 Also write a one-line clinical summary of the call (symptoms, medication,
 anything relevant) into "comentarios".
 
-## Closing
+## Closing — the most important step in the call
 
 Once you have the slot and the details, call preparar_turno with EVERYTHING that
 came up in the call — every field the caller gave you, not just the required ones.
-NEVER say the appointment is confirmed. Close with: "Perfect, I'll get that ready
-and our front desk will confirm your appointment shortly."
+
+That function call is what actually loads the appointment. Nothing else does:
+- Call preparar_turno FIRST, and only say your closing line after it comes back.
+- Saying you will "get that ready" is not the same as doing it. Never say it
+  before the call has actually been made — there is no one else who will do it.
+- Reading the appointment back to the caller is a summary, not a booking. Do not
+  summarize and stop.
+
+NEVER say the appointment is confirmed. Once preparar_turno has returned, close
+with: "Perfect, I'll get that ready and our front desk will confirm your
+appointment shortly."
 `.trim();
 
 /** Function declarations the agent can call. Handlers live in ../functions. */
@@ -70,7 +83,8 @@ export const AGENT_FUNCTIONS = [
     name: "buscar_disponibilidad",
     description:
       `Dr. Franco Daponte's real open slots. Call this BEFORE naming any date or time. ` +
-      `Returns slots_libres (the only times that exist) and dias_disponibles. ` +
+      `Returns slots_libres — the COMPLETE set of open times for that day, not a sample. ` +
+      `Any time in it is bookable even if you did not read it out loud. ` +
       `Call it with no date to hear which days the doctor works.`,
     parameters: {
       type: "object",

@@ -88,10 +88,16 @@ export const handlers: Record<string, Handler> = {
       dia: etiquetaDia(fecha),
       atiende: true,
       slots_libres: libres,
-      dias_disponibles: resumenDias(ctx.callId),
+      // Only OTHER days: listing this one again with a 3-slot preview next to
+      // the full list is what made the agent treat the preview as the whole
+      // day and refuse real slots.
+      otros_dias: resumenDias(ctx.callId).filter((d) => d.fecha !== fecha),
       instruccion:
-        "Read back two or three of slots_libres VERBATIM and let the caller pick one. " +
-        "Any time not in slots_libres does not exist in the doctor's agenda — never round to it.",
+        `slots_libres is the COMPLETE list of open times on ${etiquetaDia(fecha)} — ` +
+        `all ${libres.length} of them. Read back two or three VERBATIM so the caller has ` +
+        "a choice, but if they ask for any other time in slots_libres, accept it: " +
+        "the two or three you happened to mention are not the only ones available. " +
+        "Only a time absent from slots_libres does not exist — never round to it.",
     };
   },
 
@@ -154,10 +160,11 @@ export const handlers: Record<string, Handler> = {
         prepared: false,
         error: motivo,
         slots_libres: slotsLibres(fecha, "any", ctx.callId),
-        dias_disponibles: resumenDias(ctx.callId),
+        otros_dias: resumenDias(ctx.callId).filter((d) => d.fecha !== fecha),
         instruccion:
-          "Do NOT tell the caller it is booked. Offer a time from slots_libres " +
-          "(or another day from dias_disponibles) and call preparar_turno again.",
+          "Do NOT tell the caller it is booked. slots_libres is the complete list " +
+          `of open times on ${etiquetaDia(fecha)} — offer any of them (or a day from ` +
+          "otros_dias) and call preparar_turno again.",
       };
     }
 
