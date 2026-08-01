@@ -89,3 +89,43 @@ export const moss = {
     return (await getClient()).listIndexes();
   },
 };
+
+/**
+ * Retrieval sin Moss: overlap de palabras contra los mismos documentos que se
+ * habrian indexado. Es notoriamente peor — cuenta palabras, no entiende — pero
+ * mantiene la demo en pie cuando no hay keys, en vez de dejar al agente mudo.
+ */
+export function matchPorPalabras(
+  docs: { text: string; metadata?: Record<string, string> }[],
+  pregunta: string,
+  k = 4,
+): MossHit[] {
+  const terminos = tokens(pregunta);
+  if (!terminos.length) return [];
+  return docs
+    .map((d) => {
+      const texto = tokens(d.text);
+      return {
+        text: d.text,
+        score: terminos.filter((t) => texto.includes(t)).length / terminos.length,
+        source: d.metadata?.source ?? d.metadata?.kind,
+      };
+    })
+    .filter((h) => h.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, k);
+}
+
+const PALABRAS_VACIAS = new Set([
+  "que", "con", "por", "para", "una", "uno", "los", "las", "del", "mas", "the", "and", "for", "you",
+  "your", "was", "are", "did", "have", "has", "what", "when", "about", "last", "time", "can", "take",
+]);
+
+function tokens(s: string): string[] {
+  return String(s ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length > 2 && !PALABRAS_VACIAS.has(t));
+}

@@ -317,20 +317,23 @@
    * llamada con el paciente (background -> onMessage). El origen del dato NO
    * cambia la maquina de estados: lo que se llena sale del payload y punto.
    */
-  function arrancarCon(payload, lento, origen) {
+  function arrancarCon(payload, lento, origen, medplum) {
     if (!payload || typeof payload !== 'object') {
-      job = { payload: PAYLOAD_DEFAULT, log: [], startedAt: Date.now(), phase: 'error' };
+      job = { payload: PAYLOAD_DEFAULT, medplum, log: [], startedAt: Date.now(), phase: 'error' };
       log('err', 'Payload ausente o invalido.');
+      avisarBackend(false, { error: 'payload invalido' });
       return { ok: false, error: 'payload invalido' };
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(payload.fecha || ''))) {
-      job = { payload, log: [], startedAt: Date.now(), phase: 'error' };
+      job = { payload, medplum, log: [], startedAt: Date.now(), phase: 'error' };
       log('err', 'Falta "fecha" en formato YYYY-MM-DD.');
+      avisarBackend(false, { error: 'fecha invalida' });
       return { ok: false, error: 'fecha invalida' };
     }
     if (!/^\d{1,2}:\d{2}$/.test(String(payload.hora || ''))) {
-      job = { payload, log: [], startedAt: Date.now(), phase: 'error' };
+      job = { payload, medplum, log: [], startedAt: Date.now(), phase: 'error' };
       log('err', 'Falta "hora" en formato HH:MM.');
+      avisarBackend(false, { error: 'hora invalida' });
       return { ok: false, error: 'hora invalida' };
     }
 
@@ -338,7 +341,10 @@
     // descarta antes de navegar al calendario.
     borrarBusqueda();
 
-    job = { payload, lento: Boolean(lento), log: [], startedAt: Date.now(), phase: 'calendario' };
+    // `medplum` trae los ids que la llamada ya persistio (Patient/Appointment/
+    // Task). Viaja dentro del job porque el RPA cruza una navegacion completa y
+    // el veredicto se manda recien al final, desde la otra pagina.
+    job = { payload, medplum, lento: Boolean(lento), log: [], startedAt: Date.now(), phase: 'calendario' };
     guardarJob(job);
 
     // Si el widget esta montado, reflejar el payload que llego de la llamada.
@@ -378,7 +384,33 @@
       job.phase = 'error';
       guardarJob(job);
     }
+    avisarBackend(false, { error: (err && err.message) || String(err) });
     corriendo(false);
+  }
+
+  /**
+   * Veredicto del RPA de vuelta al backend, que lo escribe como estado del Task
+   * en MedPlum. No es la respuesta de un requestWidget(): el llenado cruza una
+   * navegacion completa y tarda mucho mas que ese canal, asi que llega solo y se
+   * correlaciona por taskId.
+   *
+   * Se manda una sola vez por job — fase2 puede terminar bien y despues fallar
+   * algo del cierre, y el primer veredicto es el que vale.
+   */
+  function avisarBackend(ok, detalle) {
+    if (!job || job.avisado) return;
+    const taskId = job.medplum && job.medplum.taskId;
+    if (!taskId) return; // corrida a mano desde el textarea: no hay Task que cerrar
+    job.avisado = true;
+    guardarJob(job);
+    try {
+      chrome.runtime.sendMessage(
+        { type: 'OIDO_RPA_RESULT', taskId, ok, ...detalle },
+        () => void chrome.runtime.lastError,
+      );
+    } catch {
+      /* fuera de un content script: el RPA sigue andando, solo no reporta */
+    }
   }
 
   /** Fase 1 — calendarios.php: sede, profesional, mes, dia. Termina navegando. */
@@ -429,6 +461,7 @@
 
       job.phase = 'done';
       guardarJob(job);
+      avisarBackend(true, { cargados: res.cargados });
     } catch (err) {
       fallar(err);
     } finally {
@@ -512,10 +545,45 @@
     }
   }
 
+  /**
+   * Si el operador esta parado en la ficha de un paciente, mandamos su historia
+   * al backend para que la indexe. Es el camino "abri la pestania del paciente y
+   * el agente de voz ya lo conoce": cuando entra la llamada, el contexto ya esta.
+   *
+   * Solo lee. No navega, no toca el formulario, y no depende de que haya una
+   * llamada en curso.
+   */
+  function ingestarFichaAbierta() {
+    if (!R.enFicha()) return;
+    if (!(globalThis.chrome && chrome.runtime && chrome.runtime.sendMessage)) return;
+    R.leerHistoria({})
+      .then(
+        (historia) =>
+          new Promise((resolve) => {
+            // El POST va por el service worker: desde esta pagina HTTPS un fetch
+            // a http://localhost se bloquea como mixed content (igual que el WS).
+            chrome.runtime.sendMessage({ type: 'OIDO_HISTORIA', historia }, (res) => {
+              void chrome.runtime.lastError;
+              resolve({ historia, res });
+            });
+          }),
+      )
+      .then(({ historia, res }) => {
+        const cuantas = `${historia.consultas.length} consultas`;
+        if (res && res.ok) {
+          console.log(`[oido] ficha de ${historia.nombreCompleto} indexada (${cuantas})`);
+        } else {
+          console.warn('[oido] el backend no acepto la ficha:', (res && res.error) || 'sin respuesta');
+        }
+      })
+      .catch((e) => console.warn('[oido] no pude leer la ficha abierta:', (e && e.message) || e));
+  }
+
   function iniciar() {
     montar();
     // Un tick para que Treelan termine de armar sus iframes.
     setTimeout(ruta, 400);
+    ingestarFichaAbierta();
   }
 
   if (document.readyState === 'loading') {
@@ -555,9 +623,31 @@
           return true; // respuesta asincrona
         }
 
+        // Historia clinica: el backend nos pasa la URL de la ficha que salio de
+        // la busqueda y le devolvemos la historia parseada, para que la indexe
+        // en Moss. Tampoco navega: es un fetch same-origin.
+        if (msg && msg.type === 'OIDO_LEER_HISTORIA') {
+          R.leerHistoria(msg.payload || {})
+            .then((historia) => {
+              const linea =
+                `Historia de ${historia.nombreCompleto || historia.hc}: ` +
+                `${historia.consultas.length} consultas, ${historia.antecedentes.length} antecedentes`;
+              console.log('[oido]', linea);
+              log('ok', linea);
+              sendResponse({ ok: true, result: historia });
+            })
+            .catch((e) => {
+              const err = (e && e.message) || String(e);
+              console.warn('[oido] lectura de historia fallo:', err);
+              log('err', `Historia clinica: ${err}`);
+              sendResponse({ ok: false, error: err });
+            });
+          return true; // respuesta asincrona
+        }
+
         if (!msg || msg.type !== 'OIDO_SCHEDULE') return false;
         montar(); // asegurar el widget montado antes de arrancar
-        const res = arrancarCon(msg.payload, msg.lento, msg.origen || 'externo');
+        const res = arrancarCon(msg.payload, msg.lento, msg.origen || 'externo', msg.medplum);
         sendResponse(res);
         return false;
       });
