@@ -1,0 +1,19 @@
+{
+  "fecha": "2026-09-29",
+  "hora": "12:00",
+  "paciente": {
+    "apellido": "TEST",
+    "nombre": "Test",
+    "tipoDoc": "DNI",
+    "documento": "12345678",
+    "domicilio": "Av. Montaneses 2500, CABA",
+    "telefono": "011 4788-0000",
+    "celular": "11 5555-1234",
+    "email": "demo@oido.ai"
+  },
+  "cobertura": "OSDE",
+  "motivo": "Consulta",
+  "usaLC": false,
+  "comentarios": "Paciente con warfarina.",
+  "enviaRecordatorio": true
+}
