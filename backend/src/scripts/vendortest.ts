@@ -66,34 +66,71 @@ try {
   console.log(`  SKIP/FAIL: ${(err as Error).message}`);
 }
 
-heading("medplum write (Appointment + Communication) — pass --write to run");
+// Note the `--`: `npm run vendortest --write` swallows the flag as an npm config
+// and silently skips this block.
+heading("medplum write (Patient → Appointment → Task → Communication) — `npm run vendortest -- --write`");
 if (process.argv.includes("--write")) {
   try {
     const { medplum } = await import("../clients/medplum.js");
-    const res = await medplum.writeAppointmentAndCommunication({
-      callId: "vendortest",
-      turno: {
-        fecha: "2026-08-05",
-        hora: "14:30",
-        doctor: "Dra. Daponte",
-        motivo: "Consulta",
-        comentarios:
-          "Paciente refiere cefalea recurrente de dos semanas. Antecedente de HTA. Solicita control.",
-        paciente: {
-          apellido: "Pérez",
-          nombre: "Ana",
-          tipoDoc: "DNI",
-          documento: "30111222",
-        },
+    const turno = {
+      fecha: "2026-08-05",
+      hora: "14:30",
+      doctor: "Dra. Daponte",
+      motivo: "Consulta",
+      comentarios:
+        "Paciente refiere cefalea recurrente de dos semanas. Antecedente de HTA. Solicita control.",
+      paciente: {
+        apellido: "Pérez",
+        nombre: "Ana",
+        tipoDoc: "DNI",
+        documento: "30111222",
       },
+    };
+
+    // Stage A: the mid-call upsert, with only what buscar_paciente knows.
+    const early = await medplum.upsertPatient(turno.paciente, { hc: "112708" });
+    console.log(`  Patient/${early.id}  (stage A — identified mid-call)`);
+
+    // Stage B: the same Patient topped up with everything the call produced. The
+    // address must survive even though stage A never carried one — that's the
+    // merge bug this guards against.
+    const full = await medplum.upsertPatient(
+      { ...turno.paciente, domicilio: "Av. Montañeses 2500, CABA", celular: "11 5555-1234" },
+      { patientId: early.id, hc: "112708" },
+    );
+    console.log(`  Patient/${full.id}  (stage B — same id? ${full.id === early.id ? "yes" : "NO — BUG"})`);
+    console.log(`    identifiers ${full.identifier?.map((i) => `${i.system?.split("/").pop()}=${i.value}`).join(" ")}`);
+    console.log(`    address     ${full.address?.[0]?.text ?? "(none)"}`);
+
+    const appointment = await medplum.createAppointment({ turno, patientId: full.id, callId: "vendortest" });
+    console.log(`  Appointment/${appointment.id}  (status: proposed — NOT booked)`);
+
+    const task = await medplum.createBookingTask({
+      turno,
+      appointmentId: appointment.id as string,
+      patientId: full.id,
+      callId: "vendortest",
     });
-    console.log(`  Appointment/${res.appointmentId}  (status: proposed — NOT booked)`);
-    console.log(`  Communication/${res.communicationId}`);
+    console.log(`  Task/${task.id}  (status: ${task.status})`);
+
+    const done = await medplum.updateTaskStatus(task.id as string, "completed", "vendortest run");
+    console.log(`  Task/${done.id}  → ${done.status}`);
+
+    const comm = await medplum.createCommunication({
+      turno,
+      patientId: full.id,
+      appointmentId: appointment.id,
+      callId: "vendortest",
+    });
+    console.log(`  Communication/${comm?.id}`);
+
+    // The projection the RPA actually fills into Treelan.
+    console.log("  fhirPatientToTurno →", JSON.stringify(medplum.fhirPatientToTurno(full, turno.paciente)));
   } catch (err) {
     console.log(`  SKIP/FAIL: ${(err as Error).message}`);
   }
 } else {
-  console.log("  skipped (creates real resources) — rerun with --write");
+  console.log("  skipped (creates real resources) — rerun with: npm run vendortest -- --write");
 }
 
 heading("preparar_turno — slot outside the agenda (must be refused)");

@@ -2,7 +2,7 @@ import { medplum } from "../clients/medplum.js";
 import { stedi } from "../clients/stedi.js";
 import { moss } from "../clients/moss.js";
 import { pushSchedule, requestWidget } from "../ws/widgetHub.js";
-import { recordado, recordar } from "../session/pacientes.js";
+import { recordado, recordar, recordarPatientId } from "../session/pacientes.js";
 import {
   DOCTOR,
   diaDeAgenda,
@@ -156,6 +156,18 @@ export const handlers: Record<string, Handler> = {
     }
 
     if (!res.encontrado || res.pacientes.length === 0) {
+      // Treelan has never seen them — which makes them exactly the caller who
+      // most needs a chart. The ID number and surname they just dictated are
+      // enough to open one, so file it now rather than at booking time.
+      if (dni && apellido) {
+        recordar(ctx.callId, { apellido, nombre, documento: dni, tipoDoc: "DNI" });
+        registrarPacienteEnMedplum(ctx.callId, {
+          apellido,
+          nombre,
+          tipoDoc: "DNI",
+          documento: dni,
+        });
+      }
       return {
         encontrado: false,
         instruccion:
@@ -191,6 +203,20 @@ export const handlers: Record<string, Handler> = {
       domicilio: p.domicilio,
       procedencia: p.procedencia,
     });
+    // Best data we'll ever have on this caller — surname, given name, DOB and
+    // address straight off the chart rather than out of a speech transcript.
+    registrarPacienteEnMedplum(
+      ctx.callId,
+      {
+        apellido: p.apellido,
+        nombre: p.nombre,
+        tipoDoc: "DNI",
+        documento: p.dni,
+        ...opt("fechaNacimiento", p.fechaNacimiento),
+        ...opt("domicilio", p.domicilio),
+      },
+      p.hc,
+    );
 
     return {
       encontrado: true,
@@ -307,17 +333,31 @@ export const handlers: Record<string, Handler> = {
 
     reservar(fecha, hora, ctx.callId);
 
+    // MedPlum first, RPA second. The Patient, Appointment and Task are written
+    // before the widget is handed anything, and the payload it fills into Treelan
+    // is projected back out of the saved Patient — so the EHR form and the
+    // clinical record cannot drift apart.
+    //
+    // That does put a FHIR round-trip in front of a live booking, so it's
+    // bounded: if the write overruns (or MedPlum is down, or unconfigured) we
+    // push the locally built payload and let the write finish in the background.
+    // A vendor outage must never cost the caller their appointment.
+    const fhir = await withTimeout(bookInMedplum(payload, ctx.callId), MEDPLUM_BOOKING_BUDGET_MS);
+
     const delivered = pushSchedule({
       type: "OIDO_SCHEDULE",
       callId: ctx.callId,
-      payload,
+      payload: fhir.ok && fhir.paciente ? { ...payload, paciente: fhir.paciente } : payload,
+      ...(fhir.ok
+        ? {
+            medplum: {
+              patientId: fhir.patientId,
+              appointmentId: fhir.appointmentId,
+              taskId: fhir.taskId,
+            },
+          }
+        : {}),
     });
-
-    // Record the caller in MedPlum: the Patient first (that's what shows up in
-    // the Patients tab), then the Appointment hanging off it — `proposed`, never
-    // `booked`. Bounded so a slow FHIR write can't stall the conversation; if it
-    // overruns, the write still lands, we just stop waiting on it.
-    const fhir = await withTimeout(recordInMedplum(payload, ctx.callId), 6000);
 
     // Demo-friendly: the appointment is "prepared" in the system regardless of
     // whether the Treelan widget is currently connected.
@@ -325,7 +365,16 @@ export const handlers: Record<string, Handler> = {
       ok: true,
       prepared: true,
       delivered,
-      medplum: fhir,
+      // Ids only: the projected patient object goes to the widget, not into the
+      // agent's context window where it's just tokens it might read out loud.
+      medplum: fhir.ok
+        ? {
+            ok: true,
+            patientId: fhir.patientId,
+            appointmentId: fhir.appointmentId,
+            taskId: fhir.taskId,
+          }
+        : fhir,
       turno: {
         doctor: DOCTOR.display,
         sede: DOCTOR.sede,
@@ -345,28 +394,139 @@ export const handlers: Record<string, Handler> = {
 };
 
 /**
- * Patient + Appointment (+ Communication) in MedPlum. Never throws — a vendor
- * outage must not take down a live call, so failures are logged and reported
- * back to the agent as `{ ok: false }`.
+ * How long preparar_turno will wait on MedPlum before handing the RPA the
+ * locally built payload instead. Deliberately tight: by this point the Patient
+ * already exists (Stage A, below), so this is an update against a known id plus
+ * two creates — if that hasn't landed in 2.5s something is wrong with the vendor
+ * and the caller shouldn't pay for it.
  */
-async function recordInMedplum(turno: TurnoPayload, callId: string) {
+const MEDPLUM_BOOKING_BUDGET_MS = 2500;
+
+type BookingWrite =
+  | {
+      ok: true;
+      patientId?: string;
+      appointmentId?: string;
+      taskId?: string;
+      /** The Treelan payload rebuilt from what actually landed in MedPlum. */
+      paciente?: TurnoPayload["paciente"];
+    }
+  | { ok: false; reason: string };
+
+/**
+ * Serializes the Patient writes belonging to one call.
+ *
+ * Stage A is fire-and-forget, so a caller who re-identifies just before booking
+ * can still have that upsert in flight when preparar_turno starts its own. Both
+ * would read the same version and the later write would silently drop whatever
+ * the other added — a mobile number given on the call, say. Chaining per callId
+ * costs nothing (in practice these are seconds apart) and closes the window.
+ */
+const cadenaPorLlamada = new Map<string, Promise<unknown>>();
+
+function enCola<T>(callId: string, fn: () => Promise<T>): Promise<T> {
+  // `previa` is always already-caught, so a failed write never blocks the next.
+  const previa = cadenaPorLlamada.get(callId) ?? Promise.resolve();
+  const siguiente = previa.then(fn);
+  const marca = siguiente.catch(() => undefined);
+  cadenaPorLlamada.set(callId, marca);
+  // Don't let the map grow for the life of the process.
+  void marca.then(() => {
+    if (cadenaPorLlamada.get(callId) === marca) cadenaPorLlamada.delete(callId);
+  });
+  return siguiente;
+}
+
+/**
+ * Stage A — file the caller in MedPlum the moment we know who they are, rather
+ * than waiting for them to pick a slot.
+ *
+ * Fire-and-forget on purpose: the agent's next sentence must not wait on a FHIR
+ * round-trip. Two payoffs. A caller who hangs up after giving their ID number
+ * still leaves a Patient behind, which is the whole point. And preparar_turno
+ * then updates a known id instead of searching for one, which is what keeps
+ * MedPlum off the RPA's critical path.
+ */
+function registrarPacienteEnMedplum(
+  callId: string,
+  paciente: TurnoPayload["paciente"],
+  hc?: string,
+) {
+  if (!medplum.isConfigured) return;
+  // A bare ID number with no surname isn't a person yet — let preparar_turno
+  // file them once the call has produced a name.
+  if (!paciente.documento || !paciente.apellido) return;
+
+  void enCola(callId, () =>
+    medplum.upsertPatient(paciente, { patientId: recordado(callId)?.patientId, hc }),
+  )
+    .then((p) => {
+      if (p.id) recordarPatientId(callId, p.id);
+      console.log(`[medplum] Patient/${p.id} filed mid-call (doc ${paciente.documento})`);
+    })
+    .catch((err) =>
+      console.error("[medplum] mid-call upsert failed:", (err as Error).message),
+    );
+}
+
+/**
+ * Stage B — Patient → Appointment → Task, in that order, before the RPA sees
+ * anything. Never throws: a vendor outage must not take down a live call, so
+ * failures are logged and reported back to the agent as `{ ok: false }`.
+ */
+async function bookInMedplum(turno: TurnoPayload, callId: string): Promise<BookingWrite> {
   if (!medplum.isConfigured) return { ok: false, reason: "MedPlum not configured" };
   try {
-    const patient = await medplum.upsertPatient(turno.paciente);
+    // Queued behind any Stage A upsert still in flight, and reading the session
+    // inside the closure so it picks up the patientId that one just filed.
+    const patient = await enCola(callId, () =>
+      medplum.upsertPatient(turno.paciente, {
+        patientId: recordado(callId)?.patientId,
+        hc: recordado(callId)?.hc,
+      }),
+    );
+    if (patient.id) recordarPatientId(callId, patient.id);
     console.log(
       `[medplum] Patient/${patient.id} ${turno.paciente.apellido}, ${turno.paciente.nombre} (doc ${turno.paciente.documento})`,
     );
 
-    const { appointmentId } = await medplum.writeAppointmentAndCommunication({
+    const appointment = await medplum.createAppointment({
       turno,
       patientId: patient.id,
       callId,
     });
-    console.log(`[medplum] Appointment/${appointmentId} status=proposed`);
+    console.log(`[medplum] Appointment/${appointment.id} status=proposed`);
 
-    return { ok: true, patientId: patient.id, appointmentId };
+    const task = await medplum.createBookingTask({
+      turno,
+      appointmentId: appointment.id as string,
+      patientId: patient.id,
+      callId,
+    });
+    console.log(`[medplum] Task/${task.id} status=requested`);
+
+    // The clinical summary isn't needed to fill the Treelan form, so it stays off
+    // the critical path where it can't eat into the booking budget.
+    void medplum
+      .createCommunication({
+        turno,
+        patientId: patient.id,
+        appointmentId: appointment.id,
+        callId,
+      })
+      .catch((err) =>
+        console.error("[medplum] Communication failed:", (err as Error).message),
+      );
+
+    return {
+      ok: true,
+      patientId: patient.id,
+      appointmentId: appointment.id,
+      taskId: task.id,
+      paciente: medplum.fhirPatientToTurno(patient, turno.paciente),
+    };
   } catch (err) {
-    console.error("[medplum] write failed:", (err as Error).message);
+    console.error("[medplum] booking write failed:", (err as Error).message);
     return { ok: false, reason: (err as Error).message };
   }
 }

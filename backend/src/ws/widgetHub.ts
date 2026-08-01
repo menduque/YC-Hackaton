@@ -1,5 +1,9 @@
 import type { WebSocketServer, WebSocket } from "ws";
-import type { OidoFieldMessage, OidoScheduleMessage } from "../types.js";
+import type {
+  OidoFieldMessage,
+  OidoRpaResultMessage,
+  OidoScheduleMessage,
+} from "../types.js";
 
 /**
  * Transport C (handoff §2): the Treelan content script opens a WS to us keyed by
@@ -20,6 +24,19 @@ interface Pending {
 const pending = new Map<string, Pending>();
 let seq = 0;
 
+/**
+ * Where an unsolicited RPA verdict goes. Wired at boot (index.ts) to the MedPlum
+ * Task update, so the hub itself stays free of vendor imports.
+ */
+type RpaResultHandler = (
+  msg: OidoRpaResultMessage & { callId: string },
+) => void | Promise<void>;
+let rpaResultHandler: RpaResultHandler | undefined;
+
+export function setRpaResultHandler(fn: RpaResultHandler) {
+  rpaResultHandler = fn;
+}
+
 export function registerWidgetHub(wss: WebSocketServer) {
   wss.on("connection", (ws, req) => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -33,11 +50,14 @@ export function registerWidgetHub(wss: WebSocketServer) {
     set.add(ws);
     console.log(`[widget-hub] connected callId=${callId} (${set.size} client/s)`);
 
-    // Two inbound messages:
+    // Three inbound messages:
     // - {type:'ping'}: keepalive. The extension's service worker sends it every
     //   ~15s; replying keeps its MV3 idle-timer from sleeping mid-call.
     // - {type:'OIDO_RESULT', id, ok, result, error}: the reply to a
     //   requestWidget() we sent earlier.
+    // - {type:'OIDO_RPA_RESULT', taskId, ok, ...}: unsolicited, once the fill on
+    //   the Treelan page finishes. Nobody is awaiting it — it closes the MedPlum
+    //   Task instead.
     ws.on("message", (data) => {
       let msg: any;
       try {
@@ -51,6 +71,16 @@ export function registerWidgetHub(wss: WebSocketServer) {
       }
       if (msg?.type === "OIDO_RESULT" && typeof msg.id === "string") {
         settle(msg.id, msg);
+        return;
+      }
+      if (msg?.type === "OIDO_RPA_RESULT" && typeof msg.taskId === "string") {
+        console.log(
+          `[widget-hub] RPA ${msg.ok ? "completed" : "failed"} callId=${callId} task=${msg.taskId}`,
+        );
+        // The widget is not waiting on us; never let a vendor error surface here.
+        void Promise.resolve(rpaResultHandler?.({ ...msg, callId })).catch((err) =>
+          console.error("[widget-hub] RPA result handler failed:", (err as Error).message),
+        );
       }
     });
 
