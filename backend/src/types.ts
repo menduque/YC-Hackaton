@@ -1,0 +1,38 @@
+/** The single object everything converges on. See handoff §1. */
+export interface TurnoPayload {
+  fecha: string; // YYYY-MM-DD, confirmed against real availability
+  hora: string; // HH:MM as in the Treelan grid
+  doctor?: string; // doctor the patient asked for (default Daponte)
+  paciente: {
+    apellido: string; // required in Treelan
+    nombre: string; // required
+    tipoDoc: "DNI" | "LC" | "LE" | "PAS" | string; // default DNI
+    documento: string;
+    domicilio?: string;
+    telefono?: string;
+    celular?: string;
+    email?: string;
+  };
+  cobertura?: string; // validated by Stedi before written (turno_deudor)
+  motivo?: string; // matches EHR options; default "Consulta"
+  usaLC?: boolean; // required in Treelan, but the front desk can fill it
+  comentarios?: string; // clinical summary — same text goes to MedPlum Communication
+  enviaRecordatorio?: boolean; // default true
+}
+
+/** Message pushed to the widget over the WS "pull" transport (handoff §2.C). */
+export interface OidoScheduleMessage {
+  type: "OIDO_SCHEDULE";
+  callId: string;
+  payload: TurnoPayload;
+  lento?: boolean;
+}
+
+/** V2 per-field streaming message (handoff §7). */
+export interface OidoFieldMessage {
+  type: "field";
+  callId: string;
+  seq: number;
+  field: string; // Treelan input name, e.g. "turno_nro_doc"
+  value: string;
+}
