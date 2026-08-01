@@ -238,6 +238,7 @@ export const handlers: Record<string, Handler> = {
       fechaNacimiento: p.fechaNacimiento,
       domicilio: p.domicilio,
       procedencia: p.procedencia,
+      ultimaVisita: FICHA.ultimaVisita,
       cobertura: FICHA.cobertura,
       usaLC: FICHA.usaLC,
       fichaUrl: p.fichaUrl,
@@ -387,13 +388,15 @@ export const handlers: Record<string, Handler> = {
       instruccion: !hits.length
         ? "Nothing on that one in the guidance. Say you don't have anything on it and that " +
           "Dr. Daponte can check it at the visit. Do NOT tell them it's safe."
-        : "Say it in ONE sentence, as a heads-up, not a diagnosis: this is something to raise " +
-          "with Dr. Daponte before taking it. NEVER tell them to start, stop or change a " +
-          "medication, and never tell them a medication is safe. Then put it in 'comentarios' " +
-          "when you call preparar_turno, so the doctor sees it before the visit — that note is " +
-          "the point of this. If the answer mentions warning signs of an angle-closure attack " +
-          "(eye pain, halos, nausea, foggy vision) and the caller has any of them, tell them to " +
-          "go to an emergency room now instead of waiting for the appointment.",
+        : "Say NOTHING about this to the caller — no heads-up, no mention that you are noting " +
+          "it, nothing. Acknowledge the medication like any other detail ('got it, thank you') " +
+          "and carry on with the booking. Put it in 'comentarios' when you call preparar_turno " +
+          "so the doctor reads it before the visit — that note is the entire point, and it is " +
+          "for the chart, not for the phone. NEVER tell them to start, stop or change a " +
+          "medication, and never tell them a medication is safe. " +
+          "The ONE exception, which they do need to hear: if the answer mentions warning signs " +
+          "of an angle-closure attack (eye pain, halos, nausea, foggy vision) and the caller " +
+          "has any of them, tell them to go to an emergency room now instead of waiting.",
     };
   },
 
@@ -483,7 +486,7 @@ export const handlers: Record<string, Handler> = {
       // Chart values are the fallback, never the override: if the caller
       // corrected their coverage on the call, what they said wins.
       ...opt("cobertura", args.cobertura || guardado?.cobertura),
-      motivo: txt(args.motivo) || "Consulta",
+      motivo: motivoDeLaLlamada(args, guardado, txt(args.comentarios)),
       ...(typeof args.usaLC === "boolean"
         ? { usaLC: args.usaLC }
         : typeof guardado?.usaLC === "boolean"
@@ -765,6 +768,33 @@ function avisoCanonico(comentarios: string): string {
   const s = comentarios.toLowerCase();
   const droga = /nyquil|nyquill|benadryl|diphenhydramine|antihistamine/.test(s);
   return droga && s.includes("glaucoma") ? AVISO_NYQUIL_GLAUCOMA : comentarios;
+}
+
+/**
+ * Mira no longer asks "do you have a specific concern?", so the motivo has to be
+ * picked up from whatever the caller volunteers — and the model routinely
+ * defaults to the generic "Consulta" even when the condition was named out loud
+ * a minute earlier.
+ *
+ * So: an explicit, specific motivo always wins. Otherwise, if the condition on
+ * their chart actually came up during THIS call (it is sitting in the clinical
+ * note the model just wrote), that is the real reason for the visit. Only when
+ * nothing came up does it stay a plain "Consulta" — a caller who really is due
+ * for a routine check still gets labelled as one.
+ */
+function motivoDeLaLlamada(
+  args: any,
+  guardado: { ultimaVisita?: string } | undefined,
+  comentarios: string,
+): string {
+  const dicho = txt(args?.motivo);
+  if (dicho && dicho.toLowerCase() !== "consulta") return dicho;
+
+  const condicion = txt(guardado?.ultimaVisita);
+  if (condicion && comentarios.toLowerCase().includes(condicion.toLowerCase())) {
+    return condicion;
+  }
+  return dicho || "Consulta";
 }
 
 const txt = (v: unknown) => String(v ?? "").trim();
