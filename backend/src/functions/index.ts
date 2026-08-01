@@ -12,6 +12,7 @@ import {
   resumenHistoria,
 } from "../session/historias.js";
 import type { HistoriaTreelan } from "../session/historias.js";
+import { FUENTE, buscarInteracciones, mencionaGlaucoma } from "../kb/glaucoma.js";
 import {
   DOCTOR,
   diaDeAgenda,
@@ -289,18 +290,75 @@ export const handlers: Record<string, Handler> = {
       medplum.getPatientContext(documento),
     ]);
 
+    // El agente no puede "detectar" glaucoma en un antecedente que nunca vio.
+    // Si esta en la ficha, se lo decimos explicitamente junto con que hacer.
+    const glaucoma = glaucomaEnHistoria(historia);
+
     return {
       ok: true,
       encontrado: Boolean(historia),
+      glaucoma,
       resumen: historia ? resumenHistoria(historia) : null,
       relevante: relevante.status === "fulfilled" ? relevante.value : [],
       fhir: fhir.status === "fulfilled" ? fhir.value : null,
-      instruccion: historia
-        ? "The chart is in Spanish — answer the caller in English. Use it to sound like you " +
+      instruccion: !historia
+        ? "No chart loaded for this caller. Don't invent history — just book the appointment."
+        : "The chart is in Spanish — answer the caller in English. Use it to sound like you " +
           "know them (their last visit, what the doctor indicated), one or two sentences max. " +
           "Never read the chart out loud, never quote chart numbers, and never give medical " +
-          "advice or interpret findings: that is what the visit with Dr. Daponte is for."
-        : "No chart loaded for this caller. Don't invent history — just book the appointment.",
+          "advice or interpret findings: that is what the visit with Dr. Daponte is for." +
+          (glaucoma
+            ? " This patient HAS GLAUCOMA on their chart. If any medication comes up at all — " +
+              "something they take, something they just bought over the counter, something " +
+              "another doctor started them on — call medical_interactions with it."
+            : ""),
+    };
+  },
+
+  /**
+   * Medicaciones riesgosas en glaucoma (kb/glaucoma.ts, indexado en Moss).
+   *
+   * Un glaucoma en la ficha mas un antihistaminico que el paciente menciona al
+   * pasar es exactamente el cruce que nadie hace por telefono: la recepcion no
+   * lee la historia y el paciente no sabe que preguntar. Esto NO le dice al
+   * paciente que hacer con su medicacion — lo marca para el medico y lo deja
+   * escrito en la ficha.
+   */
+  async medical_interactions(
+    args: { medicamento?: string; consulta?: string },
+    ctx,
+  ) {
+    const medicamento = txt(args?.medicamento);
+    const consulta = [medicamento, txt(args?.consulta)].filter(Boolean).join(" ");
+    if (!consulta) {
+      return {
+        ok: false,
+        instruccion:
+          "Ask which medication they mean — the brand name is fine (Benadryl, DayQuil, Claritin) — " +
+          "and call this again.",
+      };
+    }
+
+    const documento = recordado(ctx.callId)?.documento ?? "";
+    const enHistoria = glaucomaEnHistoria(documento ? historiaDe(documento) : undefined);
+    const hits = await buscarInteracciones(consulta, 4);
+
+    return {
+      ok: true,
+      medicamento: medicamento || null,
+      glaucoma_en_historia: enHistoria,
+      hallazgos: hits,
+      fuente: FUENTE,
+      instruccion: !hits.length
+        ? "Nothing on that one in the guidance. Say you don't have anything on it and that " +
+          "Dr. Daponte can check it at the visit. Do NOT tell them it's safe."
+        : "Say it in ONE sentence, as a heads-up, not a diagnosis: this is something to raise " +
+          "with Dr. Daponte before taking it. NEVER tell them to start, stop or change a " +
+          "medication, and never tell them a medication is safe. Then put it in 'comentarios' " +
+          "when you call preparar_turno, so the doctor sees it before the visit — that note is " +
+          "the point of this. If the answer mentions warning signs of an angle-closure attack " +
+          "(eye pain, halos, nausea, foggy vision) and the caller has any of them, tell them to " +
+          "go to an emergency room now instead of waiting for the appointment.",
     };
   },
 
@@ -455,6 +513,18 @@ export const handlers: Record<string, Handler> = {
     };
   },
 };
+
+/**
+ * Does the chart say glaucoma? Looks at the antecedentes and at the diagnoses in
+ * the recent consultations — Treelan writes it in either place.
+ */
+function glaucomaEnHistoria(historia?: HistoriaTreelan): boolean {
+  if (!historia) return false;
+  return (
+    (historia.antecedentes ?? []).some((a) => mencionaGlaucoma(a.texto)) ||
+    (historia.consultas ?? []).slice(0, 10).some((c) => mencionaGlaucoma(c.texto))
+  );
+}
 
 /**
  * Reads the caller's chart out of Treelan and indexes it, so the voice agent can

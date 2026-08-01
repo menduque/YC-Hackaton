@@ -1,4 +1,4 @@
-import { moss } from "../clients/moss.js";
+import { matchPorPalabras, moss } from "../clients/moss.js";
 
 /**
  * Memoria de historias clinicas leidas de Treelan.
@@ -142,7 +142,7 @@ export async function consultarHistoria(documento: string, pregunta: string, k =
       console.warn(`[historia] Moss fallo al consultar: ${(err as Error).message}`);
     }
   }
-  return porPalabras(guardada.docs, pregunta, k);
+  return matchPorPalabras(guardada.docs, pregunta, k);
 }
 
 /**
@@ -258,35 +258,6 @@ function antecedentesRelevantes(antecedentes: Antecedente[]): Antecedente[] {
     if (out.length >= 20) break;
   }
   return out;
-}
-
-/** Fallback sin Moss: overlap de palabras. Peor que semantico, mejor que nada. */
-function porPalabras(docs: DocHistoria[], pregunta: string, k: number) {
-  const terminos = tokens(pregunta);
-  if (!terminos.length) return [];
-  return docs
-    .map((d) => {
-      const texto = tokens(d.text);
-      const score = terminos.filter((t) => texto.includes(t)).length / terminos.length;
-      return { text: d.text, score, source: d.metadata.kind };
-    })
-    .filter((h) => h.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, k);
-}
-
-const PALABRAS_VACIAS = new Set([
-  "que", "con", "por", "para", "una", "uno", "los", "las", "del", "mas", "the", "and", "for", "you",
-  "your", "was", "are", "did", "have", "has", "what", "when", "about", "last", "time",
-]);
-
-function tokens(s: string): string[] {
-  return String(s ?? "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .split(/[^a-z0-9]+/)
-    .filter((t) => t.length > 2 && !PALABRAS_VACIAS.has(t));
 }
 
 const recortar = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);

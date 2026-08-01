@@ -177,6 +177,19 @@ ws.on("open", async () => {
   for (const h of rag.result.relevante) {
     console.log(`   ${h.score.toFixed(3)} [${h.source ?? "?"}] ${h.text.replace(/\s+/g, " ").slice(0, 110)}…`);
   }
+  console.log(`   glaucoma en la ficha: ${ctx.result.glaucoma}`);
+
+  // El cruce que nadie hace por telefono: glaucoma en la ficha + un antigripal
+  // que el paciente menciona al pasar.
+  console.log('\n7) medical_interactions — "I picked up DayQuil for a cold"');
+  const inter: any = await call("medical_interactions", {
+    medicamento: "DayQuil",
+    consulta: "I have a cold, is it ok to take it?",
+  });
+  console.log(`   glaucoma_en_historia=${inter.result.glaucoma_en_historia}`);
+  for (const h of inter.result.hallazgos) {
+    console.log(`   ${h.score.toFixed(3)} ${h.text.replace(/\s+/g, " ").slice(0, 130)}…`);
+  }
 
   await new Promise((r) => setTimeout(r, 600));
   console.log("\n   OIDO_SCHEDULE payload the extension would fill into Treelan:");

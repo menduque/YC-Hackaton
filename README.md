@@ -119,10 +119,16 @@ There is no `medplum init` command — `medplum project` only has `list`, `curre
 not browser WASM — so it only runs server-side. `loadIndex()` pulls the index into memory
 and queries then run locally in ~1 ms instead of a cloud round-trip.
 
-Two kinds of index:
+Three kinds of index:
 
 - `oido-clinical` — the triage/scheduling knowledge base. Built once with
   `npm run moss:index`.
+- `oido-interacciones` — medications that are risky for glaucoma patients, from the
+  [AAO's guidance](https://www.aao.org/eye-health/tips-prevention/dangerous-medications-glaucoma-dayquil-bendadryl)
+  (`backend/src/kb/glaucoma.ts`). Built once with `npm run moss:interacciones`. Backs the
+  `medical_interactions` agent function: when the chart says glaucoma and the caller
+  mentions any medication, the agent flags it for the doctor and writes it into the
+  appointment's `comentarios`. It never tells the caller to change a medication.
 - `oido-hc-<documento>` — **one per patient**, built from their Treelan chart the moment
   the widget reads it (`backend/src/session/historias.ts`). A real chart is ~70
   consultations and ~35k characters; it gets chunked one document per consultation, so

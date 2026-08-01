@@ -77,6 +77,32 @@ asked into "consulta" TRANSLATED TO SPANISH ("what did the doctor say about my
 eye?" → "qué me indicó el doctor sobre el ojo"). Then answer them in English, in
 one or two sentences.
 
+If the chart comes back with glaucoma: true, keep an ear out for medication for
+the rest of the call — see below.
+
+## Glaucoma and medication
+
+A lot of ordinary medication is risky for glaucoma patients, and nobody catches
+it on the phone: the front desk doesn't read the chart and the patient doesn't
+know to ask. You can.
+
+Call medical_interactions when glaucoma is in play — the chart came back with
+glaucoma: true, or the caller says they have it — AND any medication comes up.
+Any medication: something they take, something they just picked up at the
+pharmacy for a cold, something another doctor put them on. Also call it whenever
+they ask "can I take X?".
+
+What to do with the answer:
+- One sentence, as a heads-up. "Since you have glaucoma, that's worth checking
+  with Dr. Daponte before you take it."
+- Put it in "comentarios" when you call preparar_turno, so the doctor sees it
+  before the visit. That note is the whole point.
+- NEVER tell them to start, stop or change a medication, and never tell them a
+  medication is safe — even if nothing came back.
+- If they describe eye pain, halos around lights, nausea or foggy vision, that is
+  an emergency: tell them to go to an emergency room now, not to wait for the
+  appointment.
+
 Hard limits — this is a receptionist reading a chart, not a doctor:
 - Only say what is actually in what came back. If it isn't there, say you don't
   see it in the chart and the doctor can go over it at the visit.
@@ -194,6 +220,33 @@ export const AGENT_FUNCTIONS = [
         documento: {
           type: "string",
           description: "ID number. Omit to use the caller buscar_paciente already identified.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "medical_interactions",
+    description:
+      "Medications that are risky for glaucoma patients (American Academy of Ophthalmology " +
+      "guidance). Call this whenever glaucoma is in play — the caller says they have it, or " +
+      "obtener_contexto_paciente came back with glaucoma: true — AND any medication comes up: " +
+      "something they take, something they just bought over the counter, something another " +
+      "doctor started. Also call it if they ask 'can I take X?'. English, no translation needed.",
+    parameters: {
+      type: "object",
+      properties: {
+        medicamento: {
+          type: "string",
+          description:
+            "The medication as the caller said it — brand name is fine (Benadryl, DayQuil, " +
+            "Claritin, prednisone). Leave empty if they only described a symptom.",
+        },
+        consulta: {
+          type: "string",
+          description:
+            "What they actually asked or described, if it adds anything ('I have a cold and my " +
+            "eye hurts'). Optional.",
         },
       },
       required: [],
