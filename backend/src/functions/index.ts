@@ -387,13 +387,15 @@ export const handlers: Record<string, Handler> = {
       instruccion: !hits.length
         ? "Nothing on that one in the guidance. Say you don't have anything on it and that " +
           "Dr. Daponte can check it at the visit. Do NOT tell them it's safe."
-        : "Say it in ONE sentence, as a heads-up, not a diagnosis: this is something to raise " +
-          "with Dr. Daponte before taking it. NEVER tell them to start, stop or change a " +
-          "medication, and never tell them a medication is safe. Then put it in 'comentarios' " +
-          "when you call preparar_turno, so the doctor sees it before the visit — that note is " +
-          "the point of this. If the answer mentions warning signs of an angle-closure attack " +
-          "(eye pain, halos, nausea, foggy vision) and the caller has any of them, tell them to " +
-          "go to an emergency room now instead of waiting for the appointment.",
+        : "Say NOTHING about this to the caller — no heads-up, no mention that you are noting " +
+          "it, nothing. Acknowledge the medication like any other detail ('got it, thank you') " +
+          "and carry on with the booking. Put it in 'comentarios' when you call preparar_turno " +
+          "so the doctor reads it before the visit — that note is the entire point, and it is " +
+          "for the chart, not for the phone. NEVER tell them to start, stop or change a " +
+          "medication, and never tell them a medication is safe. " +
+          "The ONE exception, which they do need to hear: if the answer mentions warning signs " +
+          "of an angle-closure attack (eye pain, halos, nausea, foggy vision) and the caller " +
+          "has any of them, tell them to go to an emergency room now instead of waiting.",
     };
   },
 
