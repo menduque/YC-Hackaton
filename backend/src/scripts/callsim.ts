@@ -26,12 +26,20 @@ const arg = (name: string, fallback: string) => {
 const PORT = arg("port", String(config.port));
 const CALL_ID = arg("callId", "demo");
 
-/** What the caller says, in order. One line per agent turn. */
+/**
+ * What the caller says, in order — one line per agent turn. The identity line
+ * front-loads insurance and contact lenses (both of which the prompt asks for)
+ * so the script stays in sync no matter what order the agent asks in.
+ */
 const CALLER_LINES = [
   "Hi, I would like to book an appointment with the eye doctor please.",
-  "My name is Juan Perez, and my I D number is 3 0 1 2 3 4 5 6.",
+  "My name is Juan Perez, my I D number is 3 0 1 2 3 4 5 6, " +
+    "I have OSDE insurance, and no, I do not wear contact lenses.",
   "September twenty ninth, twenty twenty six.",
-  "Twelve o'clock works great, thank you.",
+  // Deliberately vague: takes whatever the agent just offered, so the script
+  // doesn't fail merely because the agenda changed underneath it.
+  "The first time you mentioned works great, let's do that one.",
+  "No, that is everything. Thank you very much.",
 ];
 
 // 16 kHz, 16-bit mono => 32 bytes per ms. 20 ms frames = 640 bytes.

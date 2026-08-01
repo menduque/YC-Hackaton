@@ -44,8 +44,11 @@ try {
   console.log(`  SKIP/FAIL: ${(err as Error).message}`);
 }
 
-heading("buscar_disponibilidad");
-console.log(" ", await dispatchFunction("buscar_disponibilidad", { fecha: "2026-08-05" }, ctx));
+heading("buscar_disponibilidad — a day Dr. Daponte works");
+console.log(" ", await dispatchFunction("buscar_disponibilidad", { fecha: "2026-09-29" }, ctx));
+
+heading("buscar_disponibilidad — a day he doesn't (must offer the open days)");
+console.log(" ", await dispatchFunction("buscar_disponibilidad", { fecha: "2025-08-05" }, ctx));
 
 heading("investigar_problema (Moss)");
 try {
@@ -93,15 +96,40 @@ if (process.argv.includes("--write")) {
   console.log("  skipped (creates real resources) — rerun with --write");
 }
 
+heading("preparar_turno — slot outside the agenda (must be refused)");
+console.log(
+  " ",
+  await dispatchFunction(
+    "preparar_turno",
+    {
+      fecha: "2026-09-29",
+      hora: "10:15",
+      paciente: { apellido: "Pérez", nombre: "Ana", tipoDoc: "DNI", documento: "30111222" },
+    },
+    ctx,
+  ),
+);
+
 heading("preparar_turno (no widget connected — should still succeed)");
 console.log(
   " ",
   await dispatchFunction(
     "preparar_turno",
     {
-      fecha: "2026-08-05",
-      hora: "14:30",
-      paciente: { apellido: "Pérez", nombre: "Ana", tipoDoc: "DNI", documento: "30111222" },
+      fecha: "2026-09-29",
+      hora: "12:00",
+      paciente: {
+        apellido: "Pérez",
+        nombre: "Ana",
+        tipoDoc: "DNI",
+        documento: "30111222",
+        celular: "11 5555-1234",
+        email: "ana@demo.ai",
+      },
+      cobertura: "OSDE",
+      motivo: "Consulta",
+      usaLC: true,
+      comentarios: "Visión borrosa hace dos semanas. Usa lentes de contacto.",
     },
     ctx,
   ),

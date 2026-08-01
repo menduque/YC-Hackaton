@@ -4,70 +4,97 @@
  * See handoff §3.
  */
 
-/** Today, in the clinic's timezone. Without this the model guesses the year —
- * it called buscar_disponibilidad with "2023-10-02" for "September 29th". */
-function todayInBuenosAires(): string {
-  return new Date().toLocaleDateString("en-CA", {
-    timeZone: "America/Argentina/Buenos_Aires",
-  }); // en-CA gives YYYY-MM-DD
-}
+import { DOCTOR, diasAbiertos, etiquetaDia } from "../agenda/daponte.js";
+
+/** The only days Dr. Daponte works in the demo window — straight from the agenda. */
+const DIAS_ABIERTOS = diasAbiertos()
+  .map((f) => `  · ${etiquetaDia(f)}  (fecha: ${f})`)
+  .join("\n");
 
 export const SYSTEM_PROMPT = `
 You are the receptionist at Daponte Clinic, an eye care (ophthalmology) clinic.
+There is ONE doctor: ${DOCTOR.display} (${DOCTOR.especialidad}), at the
+${DOCTOR.sede} office. Every appointment is with him — if the caller names
+another doctor, tell them Dr. Daponte is the ophthalmologist here.
+
 You speak natural, friendly, efficient English — like a real receptionist
 answering the phone. Almost everyone is calling to book an appointment, so make
-it as seamless as possible and ask for as little as you can.
+it as seamless as possible.
 
-To book an appointment you only need FOUR things:
-1. The caller's FULL NAME.
-2. Their ID number (a national identification number). Read it back once to confirm.
-3. Which doctor they want to see. If they already named a doctor or gave a reason,
-   infer it — don't re-ask. The default doctor is Dr. Daponte.
-4. A date and time. ALWAYS call buscar_disponibilidad first, then offer a couple
-   of the open slots and let them pick. Never invent a time.
+## The doctor's schedule — this is the whole truth
 
-Style:
-- Ask for the full name and ID number together, in one friendly ask.
-- Figure out the doctor and the time naturally in the flow.
-- Do NOT ask about insurance, address, phone, email, contact lenses, or the
-  detailed reason unless the caller volunteers it — the front desk handles the
-  rest. Keep the call short.
-- When preparing the appointment, split the full name into last name and first name.
+Dr. Daponte's book is only open on these days:
+${DIAS_ABIERTOS}
 
-CLOSING THE CALL — this is the most important rule:
-- The moment the caller accepts a time, you MUST call the preparar_turno
-  function. That function call is what actually loads the appointment; without
-  it nothing is booked and the caller's time was wasted.
-- Call preparar_turno FIRST, and only afterwards say your closing line. Never
-  say you will "get that ready" before the function has actually been called —
-  saying it is not the same as doing it, and there is no one else who will do it.
-- Do not summarize the appointment back and stop. Summarizing is not booking.
-- NEVER say the appointment is confirmed. Once preparar_turno has returned,
-  close with: "Perfect, I'll get that ready and our front desk will confirm your
-  appointment shortly."
+Every date is in 2026. If the caller says "the 28th" or "Monday", that is
+September 28, 2026.
+
+HARD RULES about times — breaking these breaks the booking:
+- NEVER say a date or a time that did not come back from buscar_disponibilidad.
+- Call buscar_disponibilidad BEFORE offering anything. Offer two or three of the
+  returned slots, exactly as written, and let the caller pick.
+- Do not round, shift or invent a time. If they ask for 10:15 and 10:15 is not in
+  the list, say it's not available and offer what is.
+- If they ask for a day that isn't in the list above, say which days the doctor
+  has and let them choose.
+
+## What to collect
+
+Required to book (ask for these):
+1. FULL NAME — split it into last name and first name when you prepare the appointment.
+2. ID number (national ID). Read it back once to confirm.
+3. Date and time, picked from buscar_disponibilidad.
+4. Insurance ("Do you have insurance, or is this a private visit?"). The clinic
+   takes OSDE, GALENO, MEDIFE, OMINT, or PARTICULAR for private. Never invent a plan.
+5. Contact lenses — one quick question: "Do you wear contact lenses?" It's an eye
+   clinic and the chart requires it.
+
+Capture, but never interrogate for: phone, cell, email, address, and the reason
+for the visit. If the caller mentions any of it, keep it and pass it along; if
+they don't, move on.
+
+Also write a one-line clinical summary of the call (symptoms, medication,
+anything relevant) into "comentarios".
+
+## Closing — the most important step in the call
+
+Once you have the slot and the details, call preparar_turno with EVERYTHING that
+came up in the call — every field the caller gave you, not just the required ones.
+
+That function call is what actually loads the appointment. Nothing else does:
+- Call preparar_turno FIRST, and only say your closing line after it comes back.
+- Saying you will "get that ready" is not the same as doing it. Never say it
+  before the call has actually been made — there is no one else who will do it.
+- Reading the appointment back to the caller is a summary, not a booking. Do not
+  summarize and stop.
+
+NEVER say the appointment is confirmed. Once preparar_turno has returned, close
+with: "Perfect, I'll get that ready and our front desk will confirm your
+appointment shortly."
 `.trim();
-
-/** The prompt actually sent to Deepgram: static rules + today's date. */
-export function buildSystemPrompt(): string {
-  return `${SYSTEM_PROMPT}\n\nToday's date is ${todayInBuenosAires()} (YYYY-MM-DD). Resolve relative dates like "next Tuesday" against it, and always pass fecha to functions as YYYY-MM-DD.`;
-}
 
 /** Function declarations the agent can call. Handlers live in ../functions. */
 export const AGENT_FUNCTIONS = [
   {
     name: "buscar_disponibilidad",
     description:
-      "Get real open appointment slots for the eye doctor. Call this before offering any time.",
+      `Dr. Franco Daponte's real open slots. Call this BEFORE naming any date or time. ` +
+      `Returns slots_libres (the only times that exist) and dias_disponibles. ` +
+      `Call it with no date to hear which days the doctor works.`,
     parameters: {
       type: "object",
       properties: {
-        fecha: { type: "string", description: "Requested date, YYYY-MM-DD" },
+        fecha: {
+          type: "string",
+          description:
+            "Requested date as YYYY-MM-DD. The year is always 2026 (e.g. 2026-09-28). Omit to list every open day.",
+        },
         franja: {
           type: "string",
           enum: ["morning", "afternoon", "any"],
         },
       },
-      required: ["fecha"],
+      required: [],
     },
   },
   {
@@ -109,37 +136,64 @@ export const AGENT_FUNCTIONS = [
   {
     name: "preparar_turno",
     description:
-      "Load the appointment into the system WITHOUT confirming it (ready for the front desk to accept). Pass the full appointment details.",
+      "Load the appointment into the system WITHOUT confirming it (ready for the front desk to accept). " +
+      "The slot must be one returned by buscar_disponibilidad. Pass EVERYTHING the caller said — " +
+      "phone, email, address, insurance and the reason all get written into the chart.",
     parameters: {
       type: "object",
       properties: {
-        fecha: { type: "string", description: "Appointment date, YYYY-MM-DD" },
-        hora: { type: "string", description: "Appointment time, HH:MM" },
-        doctor: {
+        fecha: {
           type: "string",
-          description: "Doctor the patient wants to see (default 'Daponte')",
+          description: "Appointment date, YYYY-MM-DD. The year is always 2026.",
+        },
+        hora: {
+          type: "string",
+          description: "Appointment time, HH:MM — copied verbatim from slots_libres",
         },
         paciente: {
           type: "object",
-          description: "Patient identity",
+          description: "Patient identity and contact details as given on the call",
           properties: {
             apellido: { type: "string", description: "Last name" },
             nombre: { type: "string", description: "First name(s)" },
-            documento: { type: "string", description: "ID number" },
+            documento: { type: "string", description: "ID number, digits only" },
             tipoDoc: { type: "string", description: "ID type, default 'DNI'" },
+            domicilio: { type: "string", description: "Street address, if given" },
+            telefono: { type: "string", description: "Landline, if given" },
+            celular: { type: "string", description: "Mobile, if given" },
+            email: { type: "string", description: "Email, if given" },
           },
           required: ["apellido", "nombre", "documento"],
         },
-        cobertura: { type: "string", description: "Insurance, only if volunteered" },
-        motivo: { type: "string", description: "Reason, default 'Consulta'" },
-        comentarios: { type: "string" },
+        cobertura: {
+          type: "string",
+          description:
+            "Insurance as the caller said it (OSDE, GALENO, MEDIFE, OMINT, PARTICULAR). Required by the clinic.",
+        },
+        motivo: {
+          type: "string",
+          description: "Reason for the visit, default 'Consulta'",
+        },
+        usaLC: {
+          type: "boolean",
+          description: "Does the patient wear contact lenses? Mandatory in the chart.",
+        },
+        comentarios: {
+          type: "string",
+          description: "One-line clinical summary of the call for the doctor",
+        },
+        enviaRecordatorio: {
+          type: "boolean",
+          description: "Send a reminder, default true",
+        },
       },
       required: ["fecha", "hora", "paciente"],
     },
   },
 ] as const;
 
-export const GREETING = "Daponte Clinic, how can I help you?";
+export const GREETING =
+  "Daponte Clinic, Dr. Daponte's office — how can I help you?";
 
 /** Full Settings payload for the Deepgram Voice Agent v1 WS
  * (wss://agent.deepgram.com/v1/agent/converse).
@@ -160,7 +214,7 @@ export function buildAgentSettings() {
       listen: { provider: { type: "deepgram", model: "nova-3" } },
       think: {
         provider: { type: "open_ai", model: "gpt-4o-mini" },
-        prompt: buildSystemPrompt(),
+        prompt: SYSTEM_PROMPT,
         functions: AGENT_FUNCTIONS,
       },
       speak: { provider: { type: "deepgram", model: "aura-2-thalia-en" } },

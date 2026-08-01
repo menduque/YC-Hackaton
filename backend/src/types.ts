@@ -2,7 +2,9 @@
 export interface TurnoPayload {
   fecha: string; // YYYY-MM-DD, confirmed against real availability
   hora: string; // HH:MM as in the Treelan grid
-  doctor?: string; // doctor the patient asked for (default Daponte)
+  doctor?: string; // Treelan's Profesional_Select label, e.g. "DAPONTE Franco"
+  profesionalId?: string; // Treelan professional UUID (traceability; the RPA matches on the label)
+  sede?: string; // "Montañeses"
   paciente: {
     apellido: string; // required in Treelan
     nombre: string; // required

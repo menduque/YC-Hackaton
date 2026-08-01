@@ -2,6 +2,18 @@ import { medplum } from "../clients/medplum.js";
 import { stedi } from "../clients/stedi.js";
 import { moss } from "../clients/moss.js";
 import { pushSchedule } from "../ws/widgetHub.js";
+import {
+  DOCTOR,
+  diaDeAgenda,
+  estadoDeSlot,
+  etiquetaDia,
+  normalizarFecha,
+  normalizarFranja,
+  normalizarHora,
+  reservar,
+  resumenDias,
+  slotsLibres,
+} from "../agenda/daponte.js";
 import type { TurnoPayload } from "../types.js";
 
 /**
@@ -17,40 +29,69 @@ export interface FnContext {
   callId: string;
 }
 
-/** The one slot known to exist in Daponte's real Treelan agenda — same
- * date/time as widget/payload.example.json. Keeps the mock availability the
- * agent offers in sync with what the RPA can actually click. */
-const DEMO_SLOT = { fecha: "2026-09-29", hora: "12:00" };
-
 type Handler = (args: any, ctx: FnContext) => Promise<unknown>;
 
 export const handlers: Record<string, Handler> = {
-  async buscar_disponibilidad(args: { fecha: string; franja?: string }) {
-    // Mock availability until the Treelan slot-read is wired. The slots the
-    // agent offers here are what the RPA later tries to click in the real
-    // calendar, so an invented time makes the widget abort with "horario
-    // ocupado o inexistente". DEMO_SLOT is the date/time shipped in
-    // widget/payload.example.json — the one known to exist in Daponte's agenda.
-    const morning = ["09:00", "09:30", "10:30", "11:15"];
-    const afternoon = ["14:30", "15:15", "16:00", "17:30"];
-    const f = (args.franja ?? "any").toLowerCase();
-    let slots =
-      f === "morning" || f === "mañana"
-        ? morning
-        : f === "afternoon" || f === "tarde"
-          ? afternoon
-          : [...morning, ...afternoon];
+  /**
+   * Dr. Daponte's real open slots (agenda/daponte.ts). Never invents a time:
+   * if the requested day has no agenda, it answers with the days that do.
+   */
+  async buscar_disponibilidad(
+    args: { fecha?: string; franja?: string },
+    ctx,
+  ) {
+    const franja = normalizarFranja(args.franja);
+    const fecha = normalizarFecha(args.fecha);
+    const base = {
+      doctor: DOCTOR.display,
+      sede: DOCTOR.sede,
+      franja,
+    };
 
-    if (args.fecha === DEMO_SLOT.fecha) {
-      // Offer the known-good time first so the agent lands on it.
-      slots = [DEMO_SLOT.hora, ...slots.filter((s) => s !== DEMO_SLOT.hora)];
+    if (!fecha || !diaDeAgenda(fecha)) {
+      return {
+        ...base,
+        fecha: fecha ?? null,
+        atiende: false,
+        motivo: fecha
+          ? `Dr. Daponte has no agenda on ${etiquetaDia(fecha)}.`
+          : "No date understood.",
+        dias_disponibles: resumenDias(ctx.callId),
+        instruccion:
+          "Tell the caller which of these days work and let them pick one. " +
+          "Do NOT offer any time for a day that is not in dias_disponibles.",
+      };
+    }
+
+    const libres = slotsLibres(fecha, franja, ctx.callId);
+    if (!libres.length) {
+      const otras = slotsLibres(fecha, "any", ctx.callId);
+      return {
+        ...base,
+        fecha,
+        dia: etiquetaDia(fecha),
+        atiende: true,
+        slots_libres: [],
+        motivo: otras.length
+          ? `Nothing left in the ${franja} on ${etiquetaDia(fecha)}.`
+          : `${etiquetaDia(fecha)} is fully booked.`,
+        slots_libres_otra_franja: otras,
+        dias_disponibles: resumenDias(ctx.callId),
+        instruccion:
+          "Offer slots_libres_otra_franja, or another day from dias_disponibles. Never invent a time.",
+      };
     }
 
     return {
-      fecha: args.fecha,
-      franja: f,
-      slots,
-      note: "Mock availability (Treelan slot-read not wired yet).",
+      ...base,
+      fecha,
+      dia: etiquetaDia(fecha),
+      atiende: true,
+      slots_libres: libres,
+      dias_disponibles: resumenDias(ctx.callId),
+      instruccion:
+        "Read back two or three of slots_libres VERBATIM and let the caller pick one. " +
+        "Any time not in slots_libres does not exist in the doctor's agenda — never round to it.",
     };
   },
 
@@ -80,11 +121,76 @@ export const handlers: Record<string, Handler> = {
     });
   },
 
-  async preparar_turno(args: TurnoPayload, ctx) {
+  /**
+   * Builds the payload the widget RPA fills into Treelan. The slot is validated
+   * against Dr. Daponte's agenda first — the widget aborts on a bad slot anyway,
+   * and it's much better to catch it here, while the caller is still on the line.
+   */
+  async preparar_turno(args: any, ctx) {
+    const fecha = normalizarFecha(args?.fecha);
+    const hora = normalizarHora(args?.hora);
+
+    if (!fecha || !hora) {
+      return {
+        ok: false,
+        error: "Date or time not understood.",
+        dias_disponibles: resumenDias(ctx.callId),
+        instruccion:
+          "Call buscar_disponibilidad and confirm a real slot with the caller before retrying.",
+      };
+    }
+
+    const estado = estadoDeSlot(fecha, hora, ctx.callId);
+    if (estado !== "libre") {
+      const motivo = {
+        "sin-agenda": `Dr. Daponte has no agenda on ${etiquetaDia(fecha)}.`,
+        inexistente: `${hora} is not a slot in the ${etiquetaDia(fecha)} grid.`,
+        ocupado: `${hora} on ${etiquetaDia(fecha)} is already taken.`,
+        bloqueado: `${hora} on ${etiquetaDia(fecha)} is blocked.`,
+        tomado: `${hora} on ${etiquetaDia(fecha)} was just taken.`,
+      }[estado];
+      return {
+        ok: false,
+        prepared: false,
+        error: motivo,
+        slots_libres: slotsLibres(fecha, "any", ctx.callId),
+        dias_disponibles: resumenDias(ctx.callId),
+        instruccion:
+          "Do NOT tell the caller it is booked. Offer a time from slots_libres " +
+          "(or another day from dias_disponibles) and call preparar_turno again.",
+      };
+    }
+
+    const pac = args?.paciente ?? {};
+    const payload: TurnoPayload = {
+      fecha,
+      hora,
+      doctor: DOCTOR.label,
+      profesionalId: DOCTOR.profesionalId,
+      sede: DOCTOR.sede,
+      paciente: {
+        apellido: txt(pac.apellido),
+        nombre: txt(pac.nombre),
+        tipoDoc: txt(pac.tipoDoc) || "DNI",
+        documento: txt(pac.documento).replace(/[.\s]/g, ""),
+        ...opt("domicilio", pac.domicilio),
+        ...opt("telefono", pac.telefono),
+        ...opt("celular", pac.celular),
+        ...opt("email", pac.email?.toString().toLowerCase()),
+      },
+      ...opt("cobertura", args.cobertura),
+      motivo: txt(args.motivo) || "Consulta",
+      ...(typeof args.usaLC === "boolean" ? { usaLC: args.usaLC } : {}),
+      ...opt("comentarios", args.comentarios),
+      enviaRecordatorio: args.enviaRecordatorio !== false,
+    };
+
+    reservar(fecha, hora, ctx.callId);
+
     const delivered = pushSchedule({
       type: "OIDO_SCHEDULE",
       callId: ctx.callId,
-      payload: normalizeTurno(args),
+      payload,
     });
     // Demo-friendly: the appointment is "prepared" in the system regardless of
     // whether the Treelan widget is currently connected.
@@ -92,30 +198,36 @@ export const handlers: Record<string, Handler> = {
       ok: true,
       prepared: true,
       delivered,
+      turno: {
+        doctor: DOCTOR.display,
+        sede: DOCTOR.sede,
+        dia: etiquetaDia(fecha),
+        fecha,
+        hora,
+      },
+      faltantes: faltantes(payload),
       note:
         delivered > 0
           ? "Appointment loaded into the EHR — ready for the front desk to confirm."
           : "Appointment prepared in the system — the front desk will confirm it shortly.",
+      instruccion:
+        "Never say the appointment is confirmed. Close with the front-desk line.",
     };
   },
 };
 
-/**
- * The agent is told to keep the call short, so it never dictates the fields
- * Treelan still requires. Fill in the defaults the function schema already
- * documents (`tipoDoc`, `motivo`) plus `usaLC`, which the prompt explicitly
- * forbids asking about — without it the widget leaves the radio red and stalls
- * on "es obligatorio en Treelan". `cobertura` is deliberately NOT defaulted:
- * if the caller didn't volunteer an insurer, a red field is the honest state
- * for the front desk to resolve.
- */
-function normalizeTurno(p: TurnoPayload): TurnoPayload {
-  return {
-    ...p,
-    motivo: p.motivo ?? "Consulta",
-    usaLC: typeof p.usaLC === "boolean" ? p.usaLC : false,
-    paciente: { ...p.paciente, tipoDoc: p.paciente?.tipoDoc ?? "DNI" },
-  };
+const txt = (v: unknown) => String(v ?? "").trim();
+const opt = (k: string, v: unknown) => (txt(v) ? { [k]: txt(v) } : {});
+
+/** Fields Treelan requires that the call didn't produce — surfaced to the agent. */
+function faltantes(p: TurnoPayload): string[] {
+  const out: string[] = [];
+  if (!p.paciente.apellido) out.push("last name");
+  if (!p.paciente.nombre) out.push("first name");
+  if (!p.paciente.documento) out.push("ID number");
+  if (!p.cobertura) out.push("insurance");
+  if (typeof p.usaLC !== "boolean") out.push("contact lenses (yes/no)");
+  return out;
 }
 
 export async function dispatchFunction(
