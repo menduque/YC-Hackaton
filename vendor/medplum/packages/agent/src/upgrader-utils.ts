@@ -1,0 +1,80 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { ReleaseManifest } from '@medplum/core';
+import { fetchVersionManifest } from '@medplum/core';
+import { createWriteStream, existsSync, unlinkSync } from 'node:fs';
+import { platform } from 'node:os';
+import { resolve } from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import type streamWeb from 'node:stream/web';
+
+export const UPGRADE_MANIFEST_PATH = resolve(__dirname, 'upgrade.json');
+export const UPGRADER_LOG_PATH = resolve(
+  __dirname,
+  `upgrader-logs-${new Date().toISOString().replaceAll(/:\s*/g, '-')}.txt`
+);
+export const RELEASES_PATH = resolve(__dirname);
+
+export async function downloadRelease(version: string, path: string): Promise<void> {
+  const release = await fetchVersionManifest('agent-upgrader', version);
+
+  // Get download url
+  const downloadUrl = parseDownloadUrl(release, platform());
+
+  // Write file to RELEASE_INSTALLER_FOLDER
+  const result = await fetch(downloadUrl);
+  if (!result.ok) {
+    throw new Error(`Failed to download installer with status code: ${result.status}`);
+  }
+  if (!result.body) {
+    throw new Error('Body not present on Response');
+  }
+
+  const readable = Readable.fromWeb(result.body as streamWeb.ReadableStream);
+
+  try {
+    await pipeline(readable, createWriteStream(path));
+  } catch (err) {
+    // The pipeline may have failed before the file was created, so only unlink if it exists
+    if (existsSync(path)) {
+      unlinkSync(path);
+    }
+    throw new Error(`Error while downloading release version ${version} to ${path}`, { cause: err });
+  }
+}
+
+export function parseDownloadUrl(release: ReleaseManifest, os: ReturnType<typeof platform>): string {
+  let endingToMatch: string;
+  switch (os) {
+    case 'win32':
+      endingToMatch = '.exe';
+      break;
+    case 'linux':
+      endingToMatch = 'linux';
+      break;
+    default:
+      throw new Error(`Unsupported platform: ${os}`);
+  }
+  for (const asset of release.assets) {
+    if (asset.name.endsWith(endingToMatch)) {
+      return asset.browser_download_url;
+    }
+  }
+  throw new Error(`No download URL found for release '${release.tag_name}' for ${os}`);
+}
+
+export function getReleaseBinPath(version: string): string {
+  let binaryName: string;
+  switch (platform()) {
+    case 'win32':
+      binaryName = `medplum-agent-installer-${version}.exe`;
+      break;
+    case 'linux':
+      binaryName = `medplum-agent-${version}-linux`;
+      break;
+    default:
+      throw new Error(`Unsupported platform: ${platform()}`);
+  }
+  return resolve(RELEASES_PATH, binaryName);
+}

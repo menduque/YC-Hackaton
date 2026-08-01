@@ -1,0 +1,38 @@
+.table {
+  border: 0.1px solid var(--mantine-color-gray-5);
+  border-collapse: collapse;
+
+  & td,
+  & th {
+    border: 0.1px solid var(--mantine-color-gray-5);
+    padding: 4px;
+  }
+
+  & :global(.mantine-Badge-root) {
+    min-width: max-content;
+  }
+}
+
+.criticalRow {
+  background: light-dark(var(--mantine-color-red-0), oklch(from var(--mantine-color-red-8) l c h / 0.2));
+  border: 0.1px solid var(--mantine-color-red-5);
+  color: light-dark(var(--mantine-color-red-5), var(--mantine-color-red-0));
+  font-weight: 500;
+
+  & td {
+    border: 0.1px solid var(--mantine-color-red-5);
+  }
+}
+
+.noteBody {
+  font-size: var(--mantine-font-size-sm);
+}
+
+.noteCite {
+  font-size: var(--mantine-font-size-xs);
+  margin-block-start: 3;
+}
+
+.noteRoot {
+  padding: 5px;
+}

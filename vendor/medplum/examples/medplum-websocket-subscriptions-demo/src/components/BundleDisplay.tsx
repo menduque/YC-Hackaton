@@ -1,0 +1,83 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import { Accordion, ActionIcon, Chip, Group } from '@mantine/core';
+import { parseReference } from '@medplum/core';
+import type { Bundle, Communication } from '@medplum/fhirtypes';
+import { useMedplum } from '@medplum/react';
+import { IconArrowNarrowRight, IconCheck } from '@tabler/icons-react';
+import type { JSX, SyntheticEvent } from 'react';
+import { useCallback } from 'react';
+
+export interface BundleDisplayProps {
+  readonly bundle: Bundle;
+}
+
+export function BundleDisplay(props: BundleDisplayProps): JSX.Element | undefined {
+  const medplum = useMedplum();
+  const { bundle } = props;
+  const communication = bundle?.entry?.find((e) => e.resource?.resourceType === 'Communication')
+    ?.resource as Communication;
+
+  const markAsCompleted = useCallback(
+    (e: SyntheticEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      medplum
+        .updateResource<Communication>({
+          ...communication,
+          received: new Date().toISOString(), // Mark as received
+          status: 'completed', // Mark as read
+          // See: https://www.medplum.com/docs/communications/messaging-data-model#communication-lifecycle
+          // for more info about recommended `Communication` lifecycle
+        })
+        .catch(console.error);
+    },
+    [medplum, communication]
+  );
+
+  if (!communication) {
+    return undefined;
+  }
+
+  const [senderType, senderId] = parseReference(communication.sender);
+  const [recipientType, recipientId] = parseReference(communication.recipient?.[0]);
+
+  return (
+    <Accordion.Item value={`${bundle?.timestamp ?? 'Unknown time'}: Chat Notification`}>
+      <Accordion.Control>
+        <Group>
+          {bundle.timestamp}{' '}
+          <Chip checked={false}>
+            {senderType}/{senderId.slice(0, 8)}
+          </Chip>
+          <IconArrowNarrowRight />
+          <Chip checked={false}>
+            {recipientType}/{recipientId.slice(0, 8)}
+          </Chip>
+          <Chip checked={communication.status === 'completed'} color="blue" variant="filled">
+            {communication.status}
+          </Chip>
+          {communication.status !== 'completed' && (
+            <ActionIcon variant="subtle" aria-label="Complete" onClick={markAsCompleted}>
+              <IconCheck style={{ width: '70%', height: '70%' }} stroke={1.5} />
+            </ActionIcon>
+          )}
+        </Group>
+      </Accordion.Control>
+      <Accordion.Panel>
+        <div
+          style={{
+            paddingLeft: 30,
+            paddingRight: 30,
+            paddingTop: 20,
+            paddingBottom: 20,
+            borderRadius: 10,
+            textAlign: 'left',
+          }}
+        >
+          <pre>{JSON.stringify(bundle, null, 2)}</pre>
+        </div>
+      </Accordion.Panel>
+    </Accordion.Item>
+  );
+}

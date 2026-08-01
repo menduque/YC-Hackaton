@@ -1,0 +1,11 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { BotEvent, MedplumClient } from '@medplum/core';
+import type { Patient } from '@medplum/fhirtypes';
+import { getPatientName } from './helpers';
+
+export async function handler(medplum: MedplumClient, event: BotEvent): Promise<any> {
+  const patient = event.input as Patient;
+  const patientName = getPatientName(patient);
+  return `Welcome ${patientName}`;
+}

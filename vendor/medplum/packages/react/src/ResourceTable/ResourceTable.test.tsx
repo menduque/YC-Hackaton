@@ -1,0 +1,102 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import { HTTP_HL7_ORG, loadDataType } from '@medplum/core';
+import { readJson } from '@medplum/definitions';
+import type { StructureDefinition } from '@medplum/fhirtypes';
+import { HomerSimpsonUSCorePatient, MockClient } from '@medplum/mock';
+import { MedplumProvider } from '@medplum/react-hooks';
+import { act, render, screen } from '../test-utils/render';
+import type { ResourceTableProps } from './ResourceTable';
+import { ResourceTable } from './ResourceTable';
+
+const medplum = new MockClient();
+
+describe('ResourceTable', () => {
+  async function setup(props: ResourceTableProps, client?: MockClient): Promise<void> {
+    await act(async () => {
+      render(
+        <MedplumProvider medplum={client ?? medplum}>
+          <ResourceTable {...props} />
+        </MedplumProvider>
+      );
+    });
+  }
+
+  test('Renders empty Practitioner form', async () => {
+    await setup({
+      value: {
+        resourceType: 'Practitioner',
+      },
+    });
+
+    expect(await screen.findByText('Name')).toBeInTheDocument();
+
+    expect(screen.getByText('ID')).toBeInTheDocument();
+    expect(screen.getByText('Name')).toBeInTheDocument();
+  });
+
+  test('Renders Practitioner resource', async () => {
+    await setup({
+      value: {
+        reference: 'Practitioner/124',
+      },
+    });
+
+    expect(await screen.findByText('Name')).toBeInTheDocument();
+
+    expect(screen.getByText('Name')).toBeInTheDocument();
+    expect(screen.getByText('Gender')).toBeInTheDocument();
+  });
+
+  test('Ignore missing values', async () => {
+    await setup({
+      value: {
+        reference: 'Practitioner/124',
+      },
+      ignoreMissingValues: true,
+    });
+
+    expect(await screen.findByText('Name')).toBeInTheDocument();
+
+    expect(screen.getByText('Name')).toBeInTheDocument();
+    expect(screen.queryByText('Gender')).toBeNull();
+  });
+
+  test('US Core Patient profile', async () => {
+    const USCoreStructureDefinitions = readJson(
+      'fhir/r4/testing/uscore-v5.0.1-structuredefinitions.json'
+    ) as StructureDefinition[];
+    const profileUrl = `${HTTP_HL7_ORG}/fhir/us/core/StructureDefinition/us-core-patient`;
+    const raceExtensionUrl = `${HTTP_HL7_ORG}/fhir/us/core/StructureDefinition/us-core-race`;
+    const ethnicityExtensionUrl = `${HTTP_HL7_ORG}/fhir/us/core/StructureDefinition/us-core-ethnicity`;
+    const profileUrls = [
+      profileUrl,
+      raceExtensionUrl,
+      ethnicityExtensionUrl,
+      `${HTTP_HL7_ORG}/fhir/us/core/StructureDefinition/us-core-birthsex`,
+      `${HTTP_HL7_ORG}/fhir/us/core/StructureDefinition/us-core-genderIdentity`,
+    ];
+    for (const url of profileUrls) {
+      const sd = USCoreStructureDefinitions.find((sd) => sd.url === url);
+      if (!sd) {
+        expect.fail(`could not find structure definition for ${url}`);
+      }
+      loadDataType(sd);
+    }
+
+    const mockedMedplum = new MockClient();
+    const fakeRequestProfileSchema = vi.fn(async (_profileUrl: string) => {});
+    mockedMedplum.requestProfileSchema = fakeRequestProfileSchema;
+
+    const value = HomerSimpsonUSCorePatient;
+    await setup({ value, profileUrl }, mockedMedplum);
+
+    expect(screen.getByText('Race')).toBeInTheDocument();
+    expect(screen.getAllByText('OMB Category')).toHaveLength(2);
+    expect(screen.getByText('Ethnicity')).toBeInTheDocument();
+    expect(screen.getByText('Not Hispanic or Latino')).toBeInTheDocument();
+    expect(screen.getByText('Birthsex')).toBeInTheDocument();
+    expect(screen.getByText('Gender Identity')).toBeInTheDocument();
+    expect(screen.getByText('Male')).toBeInTheDocument();
+  });
+});

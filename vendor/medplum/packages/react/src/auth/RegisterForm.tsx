@@ -1,0 +1,84 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { LoginAuthenticationResponse } from '@medplum/core';
+import { normalizeOperationOutcome } from '@medplum/core';
+import type { OperationOutcome } from '@medplum/fhirtypes';
+import { useMedplum } from '@medplum/react-hooks';
+import type { JSX, ReactNode } from 'react';
+import { useEffect, useState } from 'react';
+import { Document } from '../Document/Document';
+import { OperationOutcomeAlert } from '../OperationOutcomeAlert/OperationOutcomeAlert';
+import { getIssuesForExpression } from '../utils/outcomes';
+import { NewProjectForm } from './NewProjectForm';
+import { NewUserForm } from './NewUserForm';
+
+export interface RegisterFormProps {
+  readonly type: 'patient' | 'project';
+  readonly login?: string;
+  readonly projectId?: string;
+  readonly clientId?: string;
+  readonly googleClientId?: string;
+  readonly recaptchaSiteKey?: string;
+  readonly children?: ReactNode;
+  readonly onSuccess: () => void;
+  readonly onSignIn?: () => void;
+}
+
+export function RegisterForm(props: RegisterFormProps): JSX.Element {
+  const { type, projectId, clientId, googleClientId, recaptchaSiteKey, onSuccess, onSignIn } = props;
+  const medplum = useMedplum();
+  const [login, setLogin] = useState<string | undefined>(props.login);
+  const [outcome, setOutcome] = useState<OperationOutcome>();
+  const [emailVerificationRequired, setEmailVerificationRequired] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (type === 'patient' && login) {
+      medplum
+        .startNewPatient({ login, projectId: projectId as string })
+        .then((response) => medplum.processCode(response.code as string))
+        .then(() => onSuccess())
+        .catch((err) => setOutcome(normalizeOperationOutcome(err)));
+    }
+  }, [medplum, type, projectId, login, onSuccess]);
+
+  function handleAuthResponse(response: LoginAuthenticationResponse): void {
+    if (response.code) {
+      medplum
+        .processCode(response.code)
+        .then(() => onSuccess())
+        .catch((err) => setOutcome(normalizeOperationOutcome(err)));
+    }
+    if (response.login) {
+      setLogin(response.login);
+    }
+    if (response.emailVerificationRequired) {
+      setEmailVerificationRequired(true);
+    }
+  }
+
+  const issues = getIssuesForExpression(outcome, undefined);
+
+  return (
+    <Document width={400} px="xl" py="xl" bdrs="md">
+      <OperationOutcomeAlert issues={issues} mb="lg" />
+      {!login && (
+        <NewUserForm
+          projectId={projectId as string}
+          clientId={clientId}
+          googleClientId={googleClientId}
+          recaptchaSiteKey={recaptchaSiteKey}
+          onSignIn={onSignIn}
+          handleAuthResponse={handleAuthResponse}
+        >
+          {props.children}
+        </NewUserForm>
+      )}
+      {emailVerificationRequired && (
+        <div>Please check your email for a verification link. Click the link to continue setting up your account.</div>
+      )}
+      {login && !emailVerificationRequired && type === 'project' && (
+        <NewProjectForm login={login} handleAuthResponse={handleAuthResponse} />
+      )}
+    </Document>
+  );
+}

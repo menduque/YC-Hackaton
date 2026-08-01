@@ -1,0 +1,47 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { Reference } from '@medplum/fhirtypes';
+import { MockClient } from '@medplum/mock';
+import { MedplumProvider } from '@medplum/react-hooks';
+import type { ReactElement } from 'react';
+import { render, screen } from '../test-utils/render';
+import { ReferenceDisplay } from './ReferenceDisplay';
+
+const medplum = new MockClient();
+
+function setup(ui: ReactElement): void {
+  render(<MedplumProvider medplum={medplum}>{ui}</MedplumProvider>);
+}
+
+describe('ReferenceDisplay', () => {
+  test('Renders undefined', () => {
+    setup(<ReferenceDisplay />);
+  });
+
+  test('Renders reference', () => {
+    setup(<ReferenceDisplay value={{ reference: 'Organization/125' }} />);
+    expect(screen.getByText('Organization/125')).toBeDefined();
+    expect(screen.getByText<HTMLAnchorElement>('Organization/125').href).toMatch('Organization/125');
+  });
+
+  test('Renders reference and display', () => {
+    setup(<ReferenceDisplay value={{ reference: 'Organization/125', display: 'Foo' }} />);
+    expect(screen.getByText('Foo')).toBeDefined();
+    expect(screen.getByText<HTMLAnchorElement>('Foo').href).toMatch('Organization/125');
+  });
+
+  test('Renders unknown properties', () => {
+    setup(<ReferenceDisplay value={{ foo: 'bar' } as unknown as Reference} />);
+    expect(screen.getByText('{"foo":"bar"}')).toBeDefined();
+  });
+
+  test('Renders reference no link', () => {
+    setup(<ReferenceDisplay value={{ reference: 'Organization/125' }} link={false} />);
+    expect(screen.getByText('Organization/125')).toBeDefined();
+  });
+
+  test('Renders reference and display no link', () => {
+    setup(<ReferenceDisplay value={{ reference: 'Organization/125', display: 'Foo' }} link={false} />);
+    expect(screen.getByText('Foo')).toBeDefined();
+  });
+});

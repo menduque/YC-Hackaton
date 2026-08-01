@@ -1,0 +1,415 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { ClientApplication, IdentityProvider, Project, ProjectSetting } from '@medplum/fhirtypes';
+import type { KeepJobs } from 'bullmq';
+
+export interface MedplumServerConfig {
+  port: number;
+  baseUrl: string;
+  issuer: string;
+  jwksUrl: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  userInfoUrl: string;
+  introspectUrl: string;
+  registerUrl: string;
+  appBaseUrl: string;
+  logLevel?: string;
+  binaryStorage?: string;
+  storageBaseUrl: string;
+  signingKey?: string;
+  signingKeyId?: string;
+  signingKeyPassphrase?: string;
+  supportEmail: string;
+  approvedSenderEmails?: string;
+  database: MedplumDatabaseConfig;
+  /** @deprecated specify `database.host` and `database.ssl.require` as needed */
+  databaseProxyEndpoint?: string;
+  readonlyDatabase?: MedplumDatabaseConfig;
+  /** @deprecated specify `readonlyDatabase.host` and `readonlyDatabase.ssl.require` as needed */
+  readonlyDatabaseProxyEndpoint?: string;
+  redis: MedplumRedisConfig;
+  /**
+   * Optional separate Redis config for caching (resource cache, keyvalue store, server registry, etc.).
+   * Falls back to `redis` if not specified.
+   * Separating cache from other purposes can improve performance under high load by isolating cache operations.
+   */
+  cacheRedis?: MedplumRedisConfig;
+  /**
+   * Optional separate Redis config for rate limiting (HTTP rate limiter, FHIR quota, resource cap).
+   * Falls back to `redis` if not specified.
+   * Separating rate limiting from other purposes can improve performance under high load by isolating rate limiting operations.
+   */
+  rateLimitRedis?: MedplumRedisConfig;
+  /**
+   * Optional separate Redis config for pub/sub (websockets, FHIRcast, agent, MCP).
+   * Falls back to `redis` if not specified.
+   * Separating pub/sub from other purposes can improve performance under high load by isolating pub/sub operations.
+   */
+  pubSubRedis?: MedplumRedisConfig;
+  /**
+   * Optional separate Redis config for BullMQ job queues (all background workers).
+   * Falls back to `redis` if not specified.
+   * Separating background job queues from other purposes can improve performance under high load by isolating job queue operations.
+   */
+  backgroundJobsRedis?: MedplumRedisConfig;
+  emailProvider?: 'none' | 'awsses' | 'smtp';
+  smtp?: MedplumSmtpConfig;
+  /** Allow projects to configure their own SMTP transport via Project.secret entries. Default is `true`. */
+  allowProjectSmtp?: boolean;
+  bullmq?: MedplumBullmqConfig;
+  googleClientId?: string;
+  googleClientSecret?: string;
+  recaptchaSiteKey?: string;
+  recaptchaSecretKey?: string;
+  maxJsonSize: string;
+  maxBatchSize: string;
+  allowedOrigins?: string;
+  awsRegion: string;
+  /** Optional base64-encoded 256-bit key for S3 SSE-C (Server-Side Encryption with Customer-Provided Keys) */
+  sseCustomerKey?: string;
+  botLambdaRoleArn: string;
+  botLambdaLayerName: string;
+  botCustomFunctionsEnabled?: boolean;
+  logRequests?: boolean;
+  logAuditEvents?: boolean;
+  saveAuditEvents?: boolean;
+  registerEnabled?: boolean;
+  bcryptHashSalt: number;
+  introspectionEnabled?: boolean;
+  keepAliveTimeout?: number;
+  vmContextBotsEnabled?: boolean;
+  vmContextBaseUrl?: string;
+  shutdownTimeoutMilliseconds?: number;
+  heartbeatMilliseconds?: number;
+  heartbeatEnabled?: boolean;
+  accurateCountThreshold: number;
+  maxSearchOffset?: number;
+  base64BinaryMaxBytes?: number;
+  inlineAttachmentsMaxTotalBytes?: number;
+  defaultSuperAdminEmail?: string;
+  defaultSuperAdminPassword?: string;
+  defaultSuperAdminClientId?: string;
+  defaultSuperAdminClientSecret?: string;
+  defaultBotRuntimeVersion: 'awslambda' | 'vmcontext';
+  defaultProjectFeatures?: Project['features'];
+  defaultProjectSystemSetting?: ProjectSetting[];
+  /** Enables HTTP request rate limits, FHIR quota, and resource cap accounting. Default is `true`. */
+  rateLimitsEnabled?: boolean;
+  /** Number of HTTP requests per minute users can make by default; overridable by Project settings */
+  defaultRateLimit?: number;
+  defaultAuthRateLimit?: number;
+  defaultLoginRateLimit?: number;
+  /** Number of FHIR interaction rate limit units per minute users can consume by default; overridable by Project settings */
+  defaultFhirQuota?: number;
+  /** Milliseconds of delay added per quota unit in async context, in lieu of consuming quota units. */
+  asyncDelayScaling?: number;
+  /** Optional config for global default for `maxUserWebSocketSubscriptions`; overridable by Project setting: `maxUserWebSocketSubscriptions` */
+  defaultMaxUserWebSocketSubscriptions?: number;
+
+  /** Max length of Bot AuditEvent.outcomeDesc when creating a FHIR Resource */
+  maxBotLogLengthForResource?: number;
+
+  /** Max length of Bot AuditEvent.outcomeDesc when logging to logger */
+  maxBotLogLengthForLogs?: number;
+
+  /** Number of attempts for transactions that fail due to retry-able transaction errors */
+  transactionAttempts?: number;
+
+  /** Number of milliseconds to use as a base for exponential backoff in transaction retries */
+  transactionExpBackoffBaseDelayMs?: number;
+
+  /** Optional threshold in milliseconds for logging and recording high idle time within transactions */
+  idleInTransactionLogThresholdMs?: number;
+
+  /**
+   * Flag to enable/disable the background worker dispatch service. (default 'true' for enabled)
+   * Dispatch is the entry point for most background jobs including subscriptions and auto-download.
+   */
+  dispatchEnabled?: boolean;
+
+  /** Flag to enable/disable FHIR subscriptions. (default 'true' for enabled) */
+  subscriptionsEnabled?: boolean;
+
+  /** Flag to enable/disable the binary storage auto-downloader service (default 'true' for enabled) */
+  autoDownloadEnabled?: boolean;
+
+  /** Flag to enable pre-commit subscriptions for the interceptor pattern (default: false) */
+  preCommitSubscriptionsEnabled?: boolean;
+
+  /**
+   * Flag to enable server-scoped rest-hook subscriptions (default: false).
+   * When enabled, the subscription worker evaluates not only the subscriptions within a
+   * resource's own project, but also subscriptions that are not scoped to any project
+   * (i.e. stored in the system project). This allows a single set of subscriptions to
+   * apply across every project on the server.
+   */
+  serverScopedSubscriptionsEnabled?: boolean;
+
+  /** Optional list of external authentication providers. */
+  externalAuthProviders?: MedplumExternalAuthConfig[];
+
+  /** Optional list of default OAuth2 clients */
+  defaultOAuthClients?: ClientApplication[];
+
+  /** Optional flag to enable the MCP server beta */
+  mcpEnabled?: boolean;
+
+  /** Optional config for Fission.io bots */
+  fission?: MedplumFissionConfig;
+
+  /**
+   * Optional minimum LIMIT N for queries generated by FHIR searches.
+   *
+   * Enforce a floor in the LIMIT N clause of FHIR search SQL queries. If the query planner
+   * vastly over estimates how many matching rows exist and we are only asking for a few rows,
+   * the planner may choose a sequential scan since it thinks it will surely find enough
+   * rows without needing to scan much of the table. Increasing the limit has a dramatic
+   * impact on the planner's estimated cost of the sequential scan which makes it more likely
+   * for an alternative, index-based plan to be used.
+   */
+  fhirSearchMinLimit?: number;
+
+  /** Optional flag to discourage seqscan query plans for queries generated by FHIR searches */
+  fhirSearchDiscourageSeqScan?: boolean;
+
+  redactAuditEvents?: boolean;
+
+  /** Optional configuration for array column padding to mitigate statistics issues in Postgres. */
+  arrayColumnPadding?: {
+    [searchParamCode: string]:
+      | { resourceType?: string[]; config: ArrayColumnPaddingConfig }
+      | { resourceType?: string[]; config: ArrayColumnPaddingConfig }[];
+  };
+
+  /** TOTP authenticator window for MFA token validation (default: 1) */
+  mfaAuthenticatorWindow?: number;
+
+  /**
+   * Optional configuration for automatically disabling subscriptions after repeated failures.
+   * Each trigger defines a threshold: if a subscription accumulates `maxConsecutiveFailures`
+   * final failures (after all retries exhausted) within `timeWindowSeconds`, it is set to status "off".
+   * Multiple triggers are evaluated independently — the subscription is disabled if ANY trigger fires.
+   * Can be overridden per project via `Project.systemSetting[name="subscriptionAutoDisable"].valueString`.
+   */
+  subscriptionAutoDisable?: SubscriptionAutoDisableTrigger[];
+
+  /**
+   * Optional configuration for background worker pools.
+   * Allows running separate server pools for HTTP request serving vs. background job processing.
+   */
+  workers?: MedplumWorkersConfig;
+
+  /**
+   * Optional configuration for scheduled data warehouse sync jobs.
+   * Runs incremental in-server data warehouse sync jobs on a fixed cron pattern.
+   */
+  dataWarehouse?: MedplumDataWarehouseConfig;
+
+  /**
+   * Optional mTLS certificate header for incoming requests.
+   * If set, the server will attempt to extract the client certificate from the specified header.
+   * Header name should be all lowercase.
+   * For AWS ALB in "pass through" mode, this should be set to "x-amzn-mtls-clientcert".
+   * For AWS ALB in "verify" mode, this should be set to "x-amzn-mtls-clientcert-leaf".
+   */
+  mtlsCertHeader?: string;
+
+  rangeSearch?: boolean;
+
+  /**
+   * Optional URL for AI real-time transcription service.
+   * Default is `wss://api.openai.com/v1/realtime?intent=transcription`.
+   */
+  aiRealtimeTranscriptionUrl?: string;
+
+  /**
+   * Optional flag to require email verification before allowing users to create projects.
+   */
+  requireVerifiedEmailForProjectCreation?: boolean;
+
+  /**
+   * Optional flag to allow outbound fetch requests to private/local networks.
+   * Intended only for on-premises deployments that connect to trusted local services.
+   * Do not enable in hosted or cloud-managed environments.
+   */
+  allowUnsafeOutbound?: boolean;
+
+  /**
+   * Optional list of enabled search parameters by SearchParameter.id.  Default is all search parameters enabled.
+   * Note that Medplum resource type search params are always enabled regardless of this setting,
+   * as they are necesary for system functionality.
+   */
+  enabledSearchParameters?: string[];
+}
+
+export interface SubscriptionAutoDisableTrigger {
+  /** Number of final failures (after all retries exhausted) required to auto-disable. */
+  maxConsecutiveFailures: number;
+  /** Time window in seconds for counting failures. */
+  timeWindowSeconds: number;
+}
+
+export interface ArrayColumnPaddingConfig {
+  /** Count of distinct padding elements to choose from for padding elements  */
+  readonly m: number;
+  /**
+   * The lambda from the poisson distribution to achieve the desired padding
+   * element frequency with the desired confidence. See {@link https://github.com/medplum/medplum/issues/7539}
+   * or comments in `packages/server/src/fhir/token-column.ts` for in depth discussion.
+   */
+  readonly lambda: number;
+  /** The postgres statistics target for the array column */
+  readonly statisticsTarget: number;
+}
+
+/**
+ * The SSL configuration for the database.
+ */
+export interface MedplumDatabaseSslConfig {
+  ca?: string;
+  key?: string;
+  cert?: string;
+  rejectUnauthorized?: boolean;
+  require?: boolean;
+}
+
+/**
+ * Based on AWS Secrets Manager for databases.
+ * See: https://docs.aws.amazon.com/secretsmanager/latest/userguide/secretsmanager-userguide.pdf
+ */
+export interface MedplumDatabaseConfig {
+  host?: string;
+  port?: number;
+  dbname?: string;
+  username?: string;
+  password?: string;
+  ssl?: MedplumDatabaseSslConfig;
+  queryTimeout?: number;
+  runMigrations?: boolean;
+  /**
+   * Prevent post-deploy migrations from being automatically run after server startup.
+   * Setting this to `true` is not recommended except for advanced use cases.
+   */
+  disableRunPostDeployMigrations?: boolean;
+  maxConnections?: number;
+  minConnections?: number;
+  idleTimeoutMs?: number;
+  connectionTimeoutMs?: number;
+  disableConnectionConfiguration?: boolean;
+}
+
+export interface MedplumRedisConfig {
+  host?: string;
+  port?: number;
+  password?: string;
+  /** The logical database to use for Redis. See: https://redis.io/commands/select/. Default is `0`. */
+  db?: number;
+  tls?: Record<string, unknown>;
+}
+
+export interface MedplumSmtpConfig {
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  /** Use TLS when connecting. If not specified, inferred from `port === 465`. */
+  secure?: boolean;
+}
+
+export interface MedplumBullmqConfig {
+  /**
+   * Amount of jobs that a single worker is allowed to work on in parallel.
+   * @see {@link https://docs.bullmq.io/guide/workers/concurrency}
+   */
+  concurrency?: number;
+  /**
+   * Maximum number of jobs processed simultaneously across all workers for a queue (cluster-wide).
+   * Unlike `concurrency` (which is per-worker), this limit is enforced globally via Redis.
+   * When omitted, any previously-set global concurrency limit is removed.
+   * @see {@link https://docs.bullmq.io/guide/queues/global-concurrency}
+   */
+  globalConcurrency?: number;
+  /**
+   * Duration of the job lock in milliseconds while a worker is processing.
+   * @see {@link https://docs.bullmq.io/guide/workers/stalled-jobs}
+   */
+  lockDuration?: number;
+  removeOnComplete: KeepJobs;
+  removeOnFail: KeepJobs;
+}
+
+export interface MedplumExternalAuthConfig {
+  readonly issuer: string;
+  /** Optional client ID used to select this external auth provider during token exchange. */
+  readonly clientId?: string;
+  /** @deprecated Use identityProvider.userInfoUrl instead. */
+  readonly userInfoUrl?: string;
+  readonly identityProvider?: IdentityProvider;
+}
+
+export type WorkerName =
+  | 'dispatch'
+  | 'subscription'
+  | 'download'
+  | 'cron'
+  | 'reindex'
+  | 'batch'
+  | 'post-deploy-migration'
+  | 'set-accounts'
+  | 'lambda-cleaner'
+  | 'data-warehouse-sync'
+  | 'dicom';
+
+export interface MedplumWorkersConfig {
+  /**
+   * Which workers to run on this server instance. Include '*' to enable all workers.
+   * If undefined/omitted: all workers run (backwards compatible default)
+   * Specify an empty array to run no workers e.g. for an HTTP-only pool.
+   */
+  enabled?: (WorkerName | '*')[];
+
+  /**
+   * Per-worker BullMQ overrides, merged on top of global `bullmq` config.
+   * Only takes effect for workers that are enabled.
+   */
+  bullmq?: Partial<Record<WorkerName, Partial<MedplumBullmqConfig>>>;
+}
+
+export type MedplumDataWarehouseDestinationType = 's3tables' | 'local';
+
+export interface MedplumDataWarehouseConfig {
+  /**
+   * Enables/disables the scheduled sync worker. Defaults to false.
+   */
+  enabled?: boolean;
+  /**
+   * BullMQ cron pattern used to schedule sync runs.
+   */
+  cron?: string;
+  /** Warehouse export destination type. */
+  destination?: MedplumDataWarehouseDestinationType;
+  /** Required when destination is `s3tables`. */
+  awsS3TableArn?: string;
+  /** Required when destination is `local`. */
+  localBasePath?: string;
+  /** Optional Iceberg namespace used by sync. */
+  namespace?: string;
+  /**
+   * Earliest resource `lastUpdated` timestamp to include in sync (ISO-8601 date or date-time string).
+   * History rows with `lastUpdated` before this value are excluded.
+   */
+  startDate?: string;
+  /** FHIR resource types to include (e.g. `Patient`, `Observation`). When omitted, all types are candidates. */
+  includeResourceTypes?: string[];
+  /** FHIR resource types to exclude from sync. Cannot be set together with `includeResourceTypes`. */
+  excludeResourceTypes?: string[];
+}
+
+export interface MedplumFissionConfig {
+  readonly namespace: string;
+  readonly fieldManager: string;
+  readonly environmentName: string;
+  readonly routerHost: string;
+  readonly routerPort: number;
+}

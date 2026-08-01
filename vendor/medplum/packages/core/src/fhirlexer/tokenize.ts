@@ -1,0 +1,415 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+export interface Marker {
+  index: number;
+  line: number;
+  column: number;
+}
+
+export interface Token extends Marker {
+  id: string;
+  value: string;
+}
+
+const STANDARD_UNITS = [
+  'year',
+  'years',
+  'month',
+  'months',
+  'week',
+  'weeks',
+  'day',
+  'days',
+  'hour',
+  'hours',
+  'minute',
+  'minutes',
+  'second',
+  'seconds',
+  'millisecond',
+  'milliseconds',
+];
+
+/**
+ * Matches an unquoted date or dateTime literal: a 4 digit year, a 2 digit month, and then only
+ * characters that can appear in a day or time part, up to the end of the token.
+ *
+ * Used to tell a date literal apart from other values that also start with digits followed by "-",
+ * such as a UUID: "2014-10-10" is a date, "12345678-1234-4123-8123-123456789abc" is not.
+ */
+const DATE_TIME_LITERAL_REGEX = /^\d{4}-\d{2}[\dT:.+\-Z]*(?=[\s)\]]|$)/;
+
+const ESCAPE_MAP: Record<string, string> = {
+  "'": "'",
+  '"': '"',
+  '`': '`',
+  r: '\r',
+  n: '\n',
+  t: '\t',
+  f: '\f',
+  '\\': '\\',
+};
+
+export interface TokenizerOptions {
+  dateTimeLiterals?: boolean;
+  symbolRegex?: RegExp;
+}
+
+export class Tokenizer {
+  private readonly str: string;
+  private readonly keywords: string[];
+  private readonly operators: string[];
+  private readonly dateTimeLiterals: boolean;
+  private readonly symbolRegex: RegExp;
+  private readonly result: Token[] = [];
+  private readonly pos: Marker = { index: 0, line: 1, column: 0 };
+  private readonly markStack: Marker[] = [];
+
+  constructor(str: string, keywords: string[], operators: string[], options?: TokenizerOptions) {
+    this.str = str;
+    this.keywords = keywords;
+    this.operators = operators;
+    this.dateTimeLiterals = !!options?.dateTimeLiterals;
+    this.symbolRegex = options?.symbolRegex ?? /[$\w%]/;
+  }
+
+  tokenize(): Token[] {
+    while (this.pos.index < this.str.length) {
+      const token = this.consumeToken();
+      if (token) {
+        this.result.push(token);
+      }
+    }
+
+    return this.result;
+  }
+
+  private prevToken(): Token | undefined {
+    return this.result.slice(-1)[0];
+  }
+
+  private peekToken(): Token | undefined {
+    this.mark();
+    const token = this.consumeToken();
+    this.reset();
+    return token;
+  }
+
+  private consumeToken(): Token | undefined {
+    this.consumeWhitespace();
+
+    const c = this.curr();
+    if (!c) {
+      return undefined;
+    }
+
+    this.mark();
+
+    const next = this.peek();
+
+    if (c === '/' && next === '*') {
+      return this.consumeMultiLineComment();
+    }
+
+    if (c === '/' && next === '/') {
+      return this.consumeSingleLineComment();
+    }
+
+    if (c === "'" || c === '"' || c === '`') {
+      return this.consumeString(c);
+    }
+
+    if (c === '@') {
+      return this.consumeDateTime();
+    }
+
+    if (/\d/.exec(c)) {
+      return this.consumeNumber();
+    }
+
+    if (/\w/.exec(c)) {
+      return this.consumeSymbol();
+    }
+
+    if ((c === '$' || c === '%') && /\w/.exec(next)) {
+      return this.consumeSymbol();
+    }
+
+    if ((c === '$' || c === '%') && (next === "'" || next === '"' || next === '`')) {
+      return this.consumeQuotedSymbol(next);
+    }
+
+    return this.consumeOperator();
+  }
+
+  private consumeWhitespace(): void {
+    this.consumeWhile(() => /\s/.exec(this.curr()));
+  }
+
+  private consumeMultiLineComment(): Token {
+    const start = this.pos.index;
+    this.consumeWhile(() => this.curr() !== '*' || this.peek() !== '/');
+    this.advance();
+    this.advance();
+    return this.buildToken('Comment', this.str.substring(start, this.pos.index));
+  }
+
+  private consumeSingleLineComment(): Token {
+    return this.buildToken(
+      'Comment',
+      this.consumeWhile(() => this.curr() !== '\n')
+    );
+  }
+
+  private consumeString(endChar: string): Token {
+    this.advance();
+    let str = '';
+    let char: string;
+    while ((char = this.consumeChar(endChar))) {
+      str += char;
+    }
+    const result = this.buildToken(endChar === '`' ? 'Symbol' : 'String', str);
+    this.advance();
+    return result;
+  }
+
+  private consumeChar(endChar: string): string {
+    const char1 = this.curr();
+
+    if (char1 === '\\') {
+      this.advance();
+      const char2 = this.curr();
+      const escaped = ESCAPE_MAP[char2];
+      if (escaped !== undefined) {
+        this.advance();
+        return escaped;
+      }
+      if (char2 === 'u') {
+        this.advance();
+        const hex = /^[0-9a-fA-F]{4}$/.exec(this.str.substring(this.pos.index, this.pos.index + 4))?.[0];
+        if (!hex) {
+          // From the spec: https://build.fhir.org/ig/HL7/FHIRPath/#string
+          // If a \ is used at the beginning of a non-escape sequence, it will be ignored and will not appear in the sequence.
+          return 'u';
+        }
+        this.advance();
+        this.advance();
+        this.advance();
+        this.advance();
+        return String.fromCodePoint(Number.parseInt(hex, 16));
+      }
+      // From the spec: https://build.fhir.org/ig/HL7/FHIRPath/#string
+      // If a \ is used at the beginning of a non-escape sequence, it will be ignored and will not appear in the sequence.
+      return this.consumeChar(endChar); // Skip backslash and consume next character
+    }
+
+    if (char1 === endChar || !char1) {
+      return ''; // No more characters to consume
+    }
+
+    this.advance();
+    return char1;
+  }
+
+  private consumeQuotedSymbol(endChar: string): Token {
+    this.mark();
+    const start = this.pos.index;
+    this.advance(); // Consume "$" or "%"
+    this.consumeString(endChar);
+    const value = this.str.substring(start, this.pos.index);
+    return this.buildToken('Symbol', value);
+  }
+
+  private consumeDateTime(): Token {
+    this.advance(); // Consume "@"
+
+    const start = this.pos.index;
+    this.consumeWhile(() => /[\d-]/.exec(this.curr()));
+
+    let foundTime = false;
+    let foundTimeZone = false;
+
+    if (this.curr() === 'T') {
+      foundTime = true;
+      this.advance();
+      this.consumeWhile(() => /[\d:]/.exec(this.curr()));
+
+      if (this.curr() === '.' && /\d/.exec(this.peek())) {
+        this.advance();
+        this.consumeWhile(() => /\d/.exec(this.curr()));
+      }
+
+      if (this.curr() === 'Z') {
+        foundTimeZone = true;
+        this.advance();
+      } else if (this.curr() === '+' || this.curr() === '-') {
+        foundTimeZone = true;
+        this.advance();
+        this.consumeWhile(() => /[\d:]/.exec(this.curr()));
+      }
+    }
+
+    if (this.pos.index === start) {
+      throw new Error('Invalid DateTime literal');
+    }
+
+    let value = this.str.substring(start, this.pos.index);
+    if (value.endsWith('T')) {
+      // The date/time string ended with a "T", which is valid FHIRPath, but not valid ISO8601.
+      // Strip the "T" and treat as a date.
+      value = value.substring(0, value.length - 1);
+    } else if (!value.startsWith('T') && foundTime && !foundTimeZone) {
+      // FHIRPath spec says timezone is optional: https://build.fhir.org/ig/HL7/FHIRPath/#datetime
+      // The FHIRPath test suite expects the timezone to be "Z" if not specified.
+      // See: https://github.com/HL7/FHIRPath/blob/master/tests/r4/tests-fhir-r4.xml
+      value += 'Z';
+    }
+    return this.buildToken('DateTime', value);
+  }
+
+  private consumeNumber(): Token {
+    const start = this.pos.index;
+    let id = 'Number';
+    this.consumeWhile(() => /\d/.exec(this.curr()));
+
+    if (this.curr() === '.' && /\d/.exec(this.peek())) {
+      this.advance();
+      this.consumeWhile(() => /\d/.exec(this.curr()));
+    }
+
+    const terminal = this.curr();
+    if (terminal === '-' && this.dateTimeLiterals) {
+      if (DATE_TIME_LITERAL_REGEX.test(this.str.substring(start))) {
+        // Rewind to one character before the start, and then treat as dateTime literal.
+        this.pos.index = start - 1;
+        return this.consumeDateTime();
+      }
+      // Digits followed by "-" that are not a date, such as the UUID
+      // "12345678-1234-4123-8123-123456789abc". Consuming those as a dateTime literal would end the
+      // token at the first letter ("12345678-1234-4"), silently changing the value and leaving the
+      // remainder to be parsed as separate tokens.
+      return this.consumeUnquotedString(start);
+    } else if (terminal === ' ') {
+      if (isUnitToken(this.peekToken())) {
+        id = 'Quantity';
+        this.consumeToken();
+      }
+    } else if (terminal && /[a-zA-Z_$]/.exec(terminal)) {
+      // This cannot be a number, fall back to parsing as string
+      return this.consumeUnquotedString(start);
+    }
+
+    return this.buildToken(id, this.str.substring(start, this.pos.index));
+  }
+
+  /**
+   * Consumes an unquoted string value that begins with digits, such as a UUID in a `_filter`
+   * expression, starting over from the beginning of the value.
+   *
+   * The value ends at the first character that cannot be part of a token, per `symbolRegex`. For the
+   * `_filter` tokenizer that is whitespace, ")", and "]", so a value at the end of a nested
+   * expression such as "(_id eq 12345678-1234-4123-8123-123456789abc)" does not swallow the closing
+   * parenthesis.
+   *
+   * @param start - The index of the first character of the value.
+   * @returns The string token.
+   */
+  private consumeUnquotedString(start: number): Token {
+    this.pos.index = start;
+    return this.buildToken(
+      'String',
+      this.consumeWhile(() => this.symbolRegex.exec(this.curr()))
+    );
+  }
+
+  private consumeSymbol(): Token {
+    const value = this.consumeWhile(() => this.symbolRegex.exec(this.curr()));
+    if (this.prevToken()?.value !== '.' && this.keywords.includes(value)) {
+      return this.buildToken(value, value);
+    }
+    return this.buildToken('Symbol', value);
+  }
+
+  private consumeOperator(): Token {
+    const c = this.curr();
+    const next = this.peek();
+    const twoCharOp = c + next;
+
+    if (this.operators.includes(twoCharOp)) {
+      this.advance();
+      this.advance();
+      return this.buildToken(twoCharOp, twoCharOp);
+    }
+
+    this.advance();
+    return this.buildToken(c, c);
+  }
+
+  private consumeWhile(condition: () => unknown): string {
+    const start = this.pos.index;
+
+    while (this.pos.index < this.str.length && condition()) {
+      this.advance();
+    }
+
+    return this.str.substring(start, this.pos.index);
+  }
+
+  private curr(): string {
+    return this.str[this.pos.index];
+  }
+
+  private peek(): string {
+    return this.str[this.pos.index + 1] ?? '';
+  }
+
+  private mark(): void {
+    this.markStack.push({ ...this.pos });
+  }
+
+  private reset(): void {
+    const mark = this.markStack.pop();
+    if (!mark) {
+      throw new Error('No mark to reset to');
+    }
+    this.pos.index = mark.index;
+    this.pos.line = mark.line;
+    this.pos.column = mark.column;
+  }
+
+  private advance(): void {
+    this.pos.index++;
+    if (this.curr() === '\n') {
+      this.pos.line++;
+      this.pos.column = 0;
+    } else {
+      this.pos.column++;
+    }
+  }
+
+  private buildToken(id: string, value: string): Token {
+    const mark = this.markStack.pop();
+    if (!mark) {
+      throw new Error('No mark for token');
+    }
+    return {
+      id,
+      value,
+      ...mark,
+    };
+  }
+}
+
+function isUnitToken(token: Token | undefined): boolean {
+  if (token) {
+    if (token.id === 'String') {
+      return true;
+    }
+
+    if (token.id === 'Symbol' && STANDARD_UNITS.includes(token.value)) {
+      return true;
+    }
+  }
+
+  return false;
+}

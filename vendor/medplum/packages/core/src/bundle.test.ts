@@ -1,0 +1,782 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type {
+  Bundle,
+  BundleEntry,
+  DiagnosticReport,
+  Observation,
+  Patient,
+  Resource,
+  Specimen,
+} from '@medplum/fhirtypes';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { vi } from 'vitest';
+import {
+  convertContainedResourcesToBundle,
+  convertToTransactionBundle,
+  findResourceInBundle,
+  reorderBundle,
+} from './bundle';
+import { getDataType } from './typeschema/types';
+import { deepClone, EMPTY, isUUID } from './utils';
+
+let jsonFile: any;
+
+function createResourceWithReference<T extends Resource>(
+  resourceType: T['resourceType'],
+  fullUrl: string,
+  referenceField?: Partial<T>
+): BundleEntry {
+  let resource = { resourceType, id: fullUrl.split(':').pop() } as T;
+  if (referenceField) {
+    resource = { ...resource, ...referenceField };
+  }
+
+  return {
+    fullUrl,
+    resource,
+    request: { method: 'POST', url: resourceType },
+  };
+}
+
+describe('Bundle tests', () => {
+  beforeEach(() => {
+    vi.spyOn(global.Math, 'random')
+      .mockReturnValueOnce(0.1)
+      .mockReturnValueOnce(0.2)
+      .mockReturnValueOnce(0.3)
+      .mockReturnValueOnce(0.4)
+      .mockReturnValueOnce(0.5)
+      .mockReturnValueOnce(0.6)
+      .mockReturnValueOnce(0.7)
+      .mockReturnValueOnce(0.8)
+      .mockReturnValueOnce(0.9)
+      .mockReturnValueOnce(0.0);
+  });
+
+  afterEach(() => {
+    vi.spyOn(global.Math, 'random').mockRestore();
+  });
+
+  describe('FHIR Bundle Download', () => {
+    beforeEach(() => {
+      jsonFile = {
+        entry: [
+          {
+            fullUrl: 'medplum.com',
+            resource: {
+              meta: {},
+              id: '123',
+              resourceType: 'Patient',
+            },
+          },
+          {
+            fullUrl: 'app.medplum.com/123',
+            resource: {
+              meta: {
+                id: '123',
+              },
+              id: '456',
+              resourceType: 'Patient',
+            },
+          },
+        ],
+      };
+    });
+
+    test('create a FHIR bundle from JSON File', () => {
+      const transactionBundle = convertToTransactionBundle(jsonFile);
+      const firstEntry = transactionBundle.entry?.[0];
+      expect(firstEntry?.request?.url).toStrictEqual('Patient');
+    });
+  });
+
+  describe('convertToTransactionBundle', () => {
+    test('reorders a 2-element bundle', () => {
+      const inputBundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [
+          createResourceWithReference('DiagnosticReport', 'urn:uuid:3d8b6e96-6de4-48c1-b7ff-e2c26c924620', {
+            subject: { reference: 'urn:uuid:70653c8f-95e1-4b4e-84e8-8d64c15e4a13' },
+          }),
+          createResourceWithReference('Patient', 'urn:uuid:70653c8f-95e1-4b4e-84e8-8d64c15e4a13'),
+        ],
+      };
+
+      const reorderedBundle = convertToTransactionBundle(inputBundle);
+
+      expect(reorderedBundle?.entry?.map((e) => e.resource?.resourceType)).toStrictEqual([
+        'Patient',
+        'DiagnosticReport',
+      ]);
+    });
+
+    test('reorders a bundle with a cycle', () => {
+      const inputBundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [
+          createResourceWithReference('ServiceRequest', 'urn:uuid:c3d8f926-1f10-41b5-bd20-1d3d6e1f63b5', {
+            subject: { reference: 'urn:uuid:b3e7d3f5-f7c0-41c3-b1c2-8b39e271b2c8' },
+          }),
+          createResourceWithReference('Specimen', 'urn:uuid:b3e7d3f5-f7c0-41c3-b1c2-8b39e271b2c8', {
+            request: [{ reference: 'urn:uuid:c3d8f926-1f10-41b5-bd20-1d3d6e1f63b5' }],
+          }),
+        ],
+      };
+
+      const reorderedBundle = convertToTransactionBundle(inputBundle);
+
+      expect(reorderedBundle?.entry?.map((e) => e.resource?.resourceType)).toStrictEqual([
+        'ServiceRequest',
+        'Specimen',
+        'ServiceRequest',
+        'Specimen',
+      ]);
+      expect(reorderedBundle?.entry?.map((e) => e.request?.method)).toStrictEqual(['POST', 'POST', 'PUT', 'PUT']);
+    });
+
+    test('Reorders Lab bundle', () => {
+      const inputBundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [
+          createResourceWithReference('Patient', 'urn:uuid:ca760a2b-3f5d-4c85-9087-b8b6422970a8'),
+          createResourceWithReference('ServiceRequest', 'urn:uuid:76cdff91-2a4d-4c57-8922-2f2ea17f6756', {
+            subject: { reference: 'urn:uuid:ca760a2b-3f5d-4c85-9087-b8b6422970a8' },
+          }),
+          createResourceWithReference('DiagnosticReport', 'urn:uuid:9e1fe992-1e45-4a0e-8dae-cbb8490f449e', {
+            subject: { reference: 'urn:uuid:ca760a2b-3f5d-4c85-9087-b8b6422970a8' },
+            basedOn: [{ reference: 'urn:uuid:76cdff91-2a4d-4c57-8922-2f2ea17f6756' }],
+            result: [{ reference: 'urn:uuid:e2d7f292-1e1d-4d5c-9f3a-fae792856f71' }],
+          }),
+          createResourceWithReference('Observation', 'urn:uuid:e2d7f292-1e1d-4d5c-9f3a-fae792856f71', {
+            subject: { reference: 'urn:uuid:ca760a2b-3f5d-4c85-9087-b8b6422970a8' },
+          }),
+        ],
+      };
+
+      const reorderedBundle = convertToTransactionBundle(inputBundle);
+
+      expect(reorderedBundle.entry?.map((e) => e.resource?.resourceType)).toStrictEqual([
+        'Patient',
+        'Observation',
+        'ServiceRequest',
+        'DiagnosticReport',
+      ]);
+    });
+
+    test('Cancer Pathology Example', () => {
+      const bundle: Bundle = {
+        resourceType: 'Bundle',
+        id: 'us-pathology-content-bundle-example',
+        type: 'collection',
+        entry: [
+          {
+            fullUrl: 'http://hl7.org/fhir/us/cancer-reporting/Specimen/adrenal-example',
+            resource: {
+              resourceType: 'Specimen',
+              id: 'adrenal-example',
+              subject: { reference: 'Patient/JoelAlexPatient' },
+            },
+          },
+          {
+            fullUrl: 'http://hl7.org/fhir/us/cancer-reporting/Patient/JoelAlexPatient',
+            resource: {
+              resourceType: 'Patient',
+              id: 'JoelAlexPatient',
+              name: [
+                {
+                  family: 'Joel',
+                  given: ['Alex'],
+                },
+              ],
+              gender: 'male',
+            },
+          },
+        ],
+      };
+
+      const transaction = convertToTransactionBundle(bundle);
+      expect(transaction.entry?.map((e) => e.resource?.resourceType)).toMatchObject(['Patient', 'Specimen']);
+
+      const specimen = transaction.entry?.find((e) => e.resource?.resourceType === 'Specimen')?.resource as Specimen;
+      expect(isUUID(specimen?.subject?.reference?.split(':')[2] ?? '')).toBeTruthy();
+    });
+
+    test('Ignore unrecognized references', () => {
+      const inputBundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'searchset',
+        entry: [
+          {
+            fullUrl: 'https://example.com/Specimen/xyz',
+            resource: {
+              resourceType: 'Specimen',
+              subject: { reference: 'Patient/xyz' },
+            },
+          },
+        ],
+      };
+
+      const result = convertToTransactionBundle(inputBundle);
+      expect(result).toMatchObject({
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [
+          {
+            resource: {
+              resourceType: 'Specimen',
+              subject: { reference: 'Patient/xyz' },
+            },
+          },
+        ],
+      });
+    });
+
+    test('Remove empty resource.meta', () => {
+      const patient: Patient = {
+        resourceType: 'Patient',
+        meta: {
+          project: '11111111-2222-3333-4444-555555555555',
+        },
+        active: true,
+      };
+
+      const inputBundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'searchset',
+        entry: [
+          {
+            fullUrl: 'https://example.com/Patient/00000000-0000-0000-0000-000000000000',
+            resource: patient,
+          },
+        ],
+      };
+
+      const result = convertToTransactionBundle(inputBundle);
+
+      // meta.project will be removed
+      // so meta will be empty
+      // and therefore should be removed
+      expect(result?.entry?.[0]?.resource?.meta).toBeUndefined();
+    });
+
+    test('Preserve resource.meta', () => {
+      const patient: Patient = {
+        resourceType: 'Patient',
+        meta: {
+          account: {
+            reference: 'Organization/33333333-3333-3333-3333-333333333333',
+            display: 'Organization #3',
+          },
+          accounts: [
+            {
+              reference: 'Organization/33333333-3333-3333-3333-333333333333',
+              display: 'Organization #3',
+            },
+          ],
+          author: {
+            reference: 'Practitioner/22222222-2222-2222-2222-222222222222',
+            display: 'Doctor',
+          },
+          onBehalfOf: {
+            reference: 'Practitioner/22222222-2222-2222-2222-222222222222',
+            display: 'Doctor',
+          },
+          compartment: [
+            {
+              reference: 'Project/11111111-2222-3333-4444-555555555555',
+            },
+            {
+              reference: 'Patient/00000000-0000-0000-0000-000000000000',
+            },
+          ],
+          extension: [{ url: 'https://example.com/Extension/meta-1', valueBoolean: true }],
+          id: 'some-id',
+          lastUpdated: '2024-02-14T21:47:11.777Z',
+          profile: ['http://hl7.org/fhir/us/core/StructureDefinition/us-core-patient'],
+          project: '11111111-2222-3333-4444-555555555555',
+          security: [{ system: 'http://hl7.org/fhir/v3/Confidentiality', code: 'N' }],
+          source: 'https://example.com/source',
+          tag: [{ system: 'http://hl7.org/fhir/v3/ObservationValue', code: 'SUBSETTED' }],
+          versionId: '55555555-5555-5555-5555-555555555555',
+          deleted: false,
+        },
+        active: true,
+      };
+
+      const expected = deepClone(patient);
+      const meta = expected.meta;
+      if (meta === undefined) {
+        throw new Error('Expected meta to be defined');
+      }
+
+      const removedKeys = ['project', 'versionId', 'lastUpdated', 'compartment', 'author'];
+      for (const key of Object.keys(getDataType('Meta').elements)) {
+        // make sure every possible element is defined in the test
+        expect(meta).toMatchObject({ [key]: expect.anything() });
+        expect((meta as any)[key]).toBeDefined();
+
+        if (removedKeys.includes(key)) {
+          delete (meta as any)[key];
+        }
+      }
+
+      const inputBundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'searchset',
+        entry: [
+          {
+            fullUrl: 'https://example.com/Patient/00000000-0000-0000-0000-000000000000',
+            resource: patient,
+          },
+        ],
+      };
+
+      const result = convertToTransactionBundle(inputBundle);
+      expect(result?.entry?.[0]?.resource).toStrictEqual(expected);
+    });
+
+    test('rewrites attachment.url Binary references', () => {
+      const binaryId = '11111111-1111-1111-1111-111111111111';
+      const inputBundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'collection',
+        entry: [
+          {
+            resource: {
+              resourceType: 'Binary',
+              id: binaryId,
+              contentType: 'text/html',
+            },
+          },
+          {
+            resource: {
+              resourceType: 'DocumentReference',
+              id: '22222222-2222-2222-2222-222222222222',
+              status: 'current',
+              content: [
+                {
+                  attachment: {
+                    contentType: 'text/html',
+                    url: `Binary/${binaryId}`,
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      };
+
+      const result = convertToTransactionBundle(inputBundle);
+      const docRefEntry = result.entry?.find((e) => e.resource?.resourceType === 'DocumentReference');
+      const binaryEntry = result.entry?.find((e) => e.resource?.resourceType === 'Binary');
+
+      const attachmentUrl = (docRefEntry?.resource as any)?.content?.[0]?.attachment?.url;
+      expect(attachmentUrl).toBe(binaryEntry?.fullUrl);
+      expect(attachmentUrl).toMatch(/^urn:uuid:/);
+    });
+
+    test('Synthea collection bundle (Abbott509) should not fail topological sort', () => {
+      // given
+      const syntheaPath = join(
+        dirname(fileURLToPath(import.meta.url)),
+        '__fixtures__',
+        'Abbott509_Aaron203_44-subset.json'
+      );
+      let bundle = JSON.parse(readFileSync(syntheaPath, 'utf8')) as Bundle;
+      expect(bundle.type).toStrictEqual('collection');
+      // when
+      bundle = convertToTransactionBundle(bundle);
+      // then
+      expect(bundle.resourceType).toBe('Bundle');
+      expect(bundle.type).toBe('transaction');
+      expect(bundle.entry?.length).toBeGreaterThan(0);
+      for (const entry of bundle.entry ?? EMPTY) {
+        expect(entry.request?.method).toBe('POST');
+      }
+    });
+
+    test('SMART Health Card style references', () => {
+      // Source: https://build.fhir.org/ig/HL7/smart-health-cards-and-links/example-00-a-fhirBundle.json
+      const smartHealthExamplePath = join(
+        dirname(fileURLToPath(import.meta.url)),
+        '__fixtures__',
+        'example-00-a-fhirBundle.json'
+      );
+      const bundle = JSON.parse(readFileSync(smartHealthExamplePath, 'utf8')) as Bundle;
+      const transactionBundle = convertToTransactionBundle(bundle);
+      expect(transactionBundle.resourceType).toBe('Bundle');
+      expect(transactionBundle.type).toBe('transaction');
+      expect(transactionBundle.entry?.length).toBeGreaterThan(0);
+
+      const patientEntry = transactionBundle.entry?.find((e) => e.resource?.resourceType === 'Patient');
+      const immunizations =
+        transactionBundle.entry
+          ?.filter((e) => e.resource?.resourceType === 'Immunization')
+          .map((e) => e.resource as any) ?? [];
+
+      for (const immunization of immunizations) {
+        expect(immunization.patient?.reference).toBe(patientEntry?.fullUrl);
+      }
+    });
+
+    test('Patient with self-referential link does not produce duplicate entries', () => {
+      const inputBundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'collection',
+        entry: [
+          {
+            resource: {
+              resourceType: 'Patient',
+              id: '1',
+              link: [
+                {
+                  extension: [
+                    {
+                      url: 'https://open.epic.com/FHIR/StructureDefinition/patient-merge-target-reference',
+                      valueReference: {
+                        reference: 'Patient/1',
+                      },
+                    },
+                  ],
+                  other: {
+                    reference: 'Patient/2',
+                  },
+                  type: 'replaces',
+                },
+              ],
+            },
+          },
+        ],
+      };
+
+      const result = convertToTransactionBundle(inputBundle);
+
+      expect(result.entry).toHaveLength(1);
+      expect(result.entry?.[0]?.request?.method).toBe('POST');
+      expect(result.entry?.[0]?.resource?.resourceType).toBe('Patient');
+    });
+
+    test('Patient self-referential link is remapped to the new urn:uuid', () => {
+      const inputBundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'collection',
+        entry: [
+          {
+            resource: {
+              resourceType: 'Patient',
+              id: '1',
+              link: [
+                {
+                  extension: [
+                    {
+                      url: 'https://open.epic.com/FHIR/StructureDefinition/patient-merge-target-reference',
+                      valueReference: { reference: 'Patient/1' },
+                    },
+                  ],
+                  other: { reference: 'Patient/1' },
+                  type: 'seealso',
+                },
+              ],
+            },
+          },
+        ],
+      };
+
+      const result = convertToTransactionBundle(inputBundle);
+      expect(result.entry).toHaveLength(1);
+
+      const patientEntry = result.entry?.[0];
+      const patientFullUrl = patientEntry?.fullUrl;
+      expect(patientFullUrl).toMatch(/^urn:uuid:/);
+
+      const patient = patientEntry?.resource as any;
+      expect(patient.link?.[0]?.extension?.[0]?.valueReference?.reference).toBe(patientFullUrl);
+      expect(patient.link?.[0]?.other?.reference).toBe(patientFullUrl);
+    });
+  });
+
+  describe('convertContainedResourcesToBundle', () => {
+    test('Simple resource', () => {
+      const input: Patient = { resourceType: 'Patient' };
+      const result = convertContainedResourcesToBundle(input);
+      expect(result).toMatchObject({
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [
+          {
+            fullUrl: expect.stringMatching(/^urn:uuid:[a-f0-9-]{36}$/),
+            request: { method: 'POST', url: 'Patient' },
+            resource: {
+              resourceType: 'Patient',
+            },
+          },
+        ],
+      });
+    });
+
+    test('Contained observations', () => {
+      const input: DiagnosticReport = {
+        resourceType: 'DiagnosticReport',
+        status: 'final',
+        code: { text: 'test' },
+        contained: [
+          {
+            resourceType: 'Observation',
+            id: '123',
+            status: 'final',
+            code: { text: 'test' },
+            hasMember: [{ reference: '#456' }],
+          },
+          {
+            resourceType: 'Observation',
+            id: '456',
+            status: 'final',
+            code: { text: 'test' },
+          },
+        ],
+        result: [{ reference: '#123' }],
+      };
+
+      const result = convertContainedResourcesToBundle(input);
+      expect(result).toMatchObject({
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [
+          {
+            fullUrl: expect.stringMatching(/^urn:uuid:[a-f0-9-]{36}$/),
+            request: { method: 'POST', url: 'Observation' },
+            resource: {
+              resourceType: 'Observation',
+            },
+          },
+          {
+            fullUrl: expect.stringMatching(/^urn:uuid:[a-f0-9-]{36}$/),
+            request: { method: 'POST', url: 'Observation' },
+            resource: {
+              resourceType: 'Observation',
+              hasMember: [
+                {
+                  reference: expect.stringMatching(/^urn:uuid:[a-f0-9-]{36}$/),
+                },
+              ],
+            },
+          },
+          {
+            fullUrl: expect.stringMatching(/^urn:uuid:[a-f0-9-]{36}$/),
+            request: { method: 'POST', url: 'DiagnosticReport' },
+            resource: {
+              resourceType: 'DiagnosticReport',
+              result: [
+                {
+                  reference: expect.stringMatching(/^urn:uuid:[a-f0-9-]{36}$/),
+                },
+              ],
+            },
+          },
+        ],
+      });
+    });
+  });
+
+  describe('reorderBundle', () => {
+    test('Preserves entries without fullUrl and appends them at the end', () => {
+      const inputBundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [
+          // Entry with fullUrl that references Patient (should be reordered)
+          createResourceWithReference('DiagnosticReport', 'urn:uuid:3d8b6e96-6de4-48c1-b7ff-e2c26c924620', {
+            subject: { reference: 'urn:uuid:70653c8f-95e1-4b4e-84e8-8d64c15e4a13' },
+          }),
+          // Entry with fullUrl (should come first after reordering)
+          createResourceWithReference('Patient', 'urn:uuid:70653c8f-95e1-4b4e-84e8-8d64c15e4a13'),
+          // Entry without fullUrl (PATCH operation - should be preserved and appended at end)
+          {
+            request: {
+              method: 'PATCH',
+              url: 'Patient/70653c8f-95e1-4b4e-84e8-8d64c15e4a13',
+            },
+            resource: {
+              resourceType: 'Binary',
+              contentType: 'application/json-patch+json',
+              data: 'W3sib3AiOiJyZXBsYWNlIiwicGF0aCI6Ii9hY3RpdmUiLCJ2YWx1ZSI6dHJ1ZX1d',
+            },
+          },
+          // Another entry without fullUrl (should also be preserved)
+          {
+            request: {
+              method: 'PATCH',
+              url: 'Observation/123',
+            },
+            resource: {
+              resourceType: 'Binary',
+              contentType: 'application/json-patch+json',
+              data: 'W3sib3AiOiJhZGQiLCJwYXRoIjoiL3N0YXR1cyIsInZhbHVlIjoiZmluYWwifV0=',
+            },
+          },
+          {
+            fullUrl: 'urn:uuid:a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+            request: { method: 'POST', url: 'Observation' },
+            resource: {
+              resourceType: 'Observation',
+              status: 'final',
+              code: { text: 'test' },
+              subject: { reference: 'urn:uuid:70653c8f-95e1-4b4e-84e8-8d64c15e4a13' },
+              derivedFrom: [{ reference: 'urn:uuid:3d8b6e96-6de4-48c1-b7ff-e2c26c924620' }],
+            },
+          },
+        ],
+      };
+
+      const reorderedBundle = reorderBundle(inputBundle);
+
+      // Entries with fullUrl should be reordered (Patient before DiagnosticReport)
+      expect(reorderedBundle?.entry?.length).toBe(5);
+      expect(reorderedBundle?.entry?.[0]?.resource?.resourceType).toBe('Patient');
+      expect(reorderedBundle?.entry?.[0]?.fullUrl).toBe('urn:uuid:70653c8f-95e1-4b4e-84e8-8d64c15e4a13');
+      expect(reorderedBundle?.entry?.[1]?.resource?.resourceType).toBe('DiagnosticReport');
+      expect(reorderedBundle?.entry?.[1]?.fullUrl).toBe('urn:uuid:3d8b6e96-6de4-48c1-b7ff-e2c26c924620');
+      expect(reorderedBundle?.entry?.[2]?.resource?.resourceType).toBe('Observation');
+      expect(reorderedBundle?.entry?.[2]?.fullUrl).toBe('urn:uuid:a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+
+      // Entries without fullUrl should be preserved and appended at the end
+      expect(reorderedBundle?.entry?.[3]?.fullUrl).toBeUndefined();
+      expect(reorderedBundle?.entry?.[3]?.request?.method).toBe('PATCH');
+      expect(reorderedBundle?.entry?.[3]?.request?.url).toBe('Patient/70653c8f-95e1-4b4e-84e8-8d64c15e4a13');
+      expect(reorderedBundle?.entry?.[3]?.resource?.resourceType).toBe('Binary');
+      expect(reorderedBundle?.entry?.[4]?.fullUrl).toBeUndefined();
+      expect(reorderedBundle?.entry?.[4]?.request?.method).toBe('PATCH');
+      expect(reorderedBundle?.entry?.[4]?.request?.url).toBe('Observation/123');
+      expect(reorderedBundle?.entry?.[4]?.resource?.resourceType).toBe('Binary');
+    });
+  });
+
+  describe('findResourceById', () => {
+    test('Single resource', () => {
+      const patient1: Patient = {
+        resourceType: 'Patient',
+        id: '123',
+        name: [{ given: ['John'], family: 'Doe' }],
+      };
+      const bundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [{ resource: patient1 }],
+      };
+      const result = findResourceInBundle(bundle, 'Patient', '123');
+      expect(result).toMatchObject({
+        resourceType: 'Patient',
+        id: '123',
+      });
+    });
+
+    test('No matches', () => {
+      const patient1: Patient = {
+        resourceType: 'Patient',
+        id: '123',
+        name: [{ given: ['John'], family: 'Doe' }],
+      };
+      const bundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [{ resource: patient1 }],
+      };
+      const result = findResourceInBundle(bundle, 'Observation', '123');
+      expect(result).toBeUndefined();
+    });
+
+    test('Two resources, same type', () => {
+      const patient1: Patient = {
+        resourceType: 'Patient',
+        id: '123',
+        name: [{ given: ['John'], family: 'Doe' }],
+      };
+      const patient2: Patient = {
+        resourceType: 'Patient',
+        id: '456',
+        name: [{ given: ['Jane'], family: 'Doe' }],
+      };
+      const bundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [{ resource: patient1 }, { resource: patient2 }],
+      };
+      const result = findResourceInBundle(bundle, 'Patient', '123');
+      expect(result).toMatchObject({
+        resourceType: 'Patient',
+        id: '123',
+      });
+    });
+
+    test('Two resources, different types', () => {
+      const patient1: Patient = {
+        resourceType: 'Patient',
+        id: '123',
+        name: [{ given: ['John'], family: 'Doe' }],
+      };
+      const obs: Observation = {
+        resourceType: 'Observation',
+        status: 'preliminary',
+        code: {
+          coding: [
+            {
+              system: 'http://loinc.org',
+              code: '9372-2',
+              display: 'test title',
+            },
+          ],
+          text: 'test title',
+        },
+      };
+      const bundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [{ resource: patient1 }, { resource: obs }],
+      };
+      const result = findResourceInBundle(bundle, 'Patient', '123');
+      expect(result).toMatchObject({
+        resourceType: 'Patient',
+        id: '123',
+      });
+    });
+
+    test('Two resources, different types, same id', () => {
+      const patient1: Patient = {
+        resourceType: 'Patient',
+        id: '123',
+        name: [{ given: ['John'], family: 'Doe' }],
+      };
+      const obs: Observation = {
+        resourceType: 'Observation',
+        id: '123',
+        status: 'preliminary',
+        code: {
+          coding: [
+            {
+              system: 'http://loinc.org',
+              code: '9372-2',
+              display: 'test title',
+            },
+          ],
+          text: 'test title',
+        },
+      };
+      const bundle: Bundle = {
+        resourceType: 'Bundle',
+        type: 'transaction',
+        entry: [{ resource: patient1 }, { resource: obs }],
+      };
+      const result = findResourceInBundle(bundle, 'Patient', '123');
+      expect(result).toMatchObject({
+        resourceType: 'Patient',
+        id: '123',
+      });
+    });
+  });
+});

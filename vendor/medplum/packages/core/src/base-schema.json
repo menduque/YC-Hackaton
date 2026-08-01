@@ -1,0 +1,4332 @@
+{
+  "Element": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      }
+    }
+  },
+  "BackboneElement": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "modifierExtension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      }
+    }
+  },
+  "Address": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "use": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "type": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "text": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "line": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "city": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "district": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "state": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "postalCode": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "country": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "period": {
+        "type": [
+          {
+            "code": "Period"
+          }
+        ]
+      }
+    }
+  },
+  "Age": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "value": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "comparator": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "unit": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "system": {
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "code": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      }
+    }
+  },
+  "Annotation": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "author[x]": {
+        "type": [
+          {
+            "code": "Reference",
+            "targetProfile": [
+              "http://hl7.org/fhir/StructureDefinition/Practitioner",
+              "http://hl7.org/fhir/StructureDefinition/Patient",
+              "http://hl7.org/fhir/StructureDefinition/RelatedPerson",
+              "http://hl7.org/fhir/StructureDefinition/Organization"
+            ]
+          },
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "time": {
+        "type": [
+          {
+            "code": "dateTime"
+          }
+        ]
+      },
+      "text": {
+        "min": 1,
+        "type": [
+          {
+            "code": "markdown"
+          }
+        ]
+      }
+    }
+  },
+  "Attachment": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "contentType": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "language": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "data": {
+        "type": [
+          {
+            "code": "base64Binary"
+          }
+        ]
+      },
+      "url": {
+        "type": [
+          {
+            "code": "url"
+          }
+        ]
+      },
+      "size": {
+        "type": [
+          {
+            "code": "unsignedInt"
+          }
+        ]
+      },
+      "hash": {
+        "type": [
+          {
+            "code": "base64Binary"
+          }
+        ]
+      },
+      "title": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "creation": {
+        "type": [
+          {
+            "code": "dateTime"
+          }
+        ]
+      }
+    }
+  },
+  "CodeableConcept": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "coding": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Coding"
+          }
+        ]
+      },
+      "text": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      }
+    }
+  },
+  "Coding": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "system": {
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "version": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "code": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "display": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "userSelected": {
+        "type": [
+          {
+            "code": "boolean"
+          }
+        ]
+      }
+    }
+  },
+  "ContactDetail": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "name": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "telecom": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "ContactPoint"
+          }
+        ]
+      }
+    }
+  },
+  "ContactPoint": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "system": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "value": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "use": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "rank": {
+        "type": [
+          {
+            "code": "positiveInt"
+          }
+        ]
+      },
+      "period": {
+        "type": [
+          {
+            "code": "Period"
+          }
+        ]
+      }
+    }
+  },
+  "Contributor": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "type": {
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "name": {
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "contact": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "ContactDetail"
+          }
+        ]
+      }
+    }
+  },
+  "Count": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "value": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "comparator": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "unit": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "system": {
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "code": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      }
+    }
+  },
+  "DataRequirement": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "type": {
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "profile": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "canonical",
+            "targetProfile": ["http://hl7.org/fhir/StructureDefinition/StructureDefinition"]
+          }
+        ]
+      },
+      "subject[x]": {
+        "type": [
+          {
+            "code": "CodeableConcept"
+          },
+          {
+            "code": "Reference",
+            "targetProfile": ["http://hl7.org/fhir/StructureDefinition/Group"]
+          }
+        ]
+      },
+      "mustSupport": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "codeFilter": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "DataRequirementCodeFilter"
+          }
+        ]
+      },
+      "dateFilter": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "DataRequirementDateFilter"
+          }
+        ]
+      },
+      "limit": {
+        "type": [
+          {
+            "code": "positiveInt"
+          }
+        ]
+      },
+      "sort": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "DataRequirementSort"
+          }
+        ]
+      }
+    }
+  },
+  "DataRequirementCodeFilter": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "path": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "searchParam": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "valueSet": {
+        "type": [
+          {
+            "code": "canonical",
+            "targetProfile": ["http://hl7.org/fhir/StructureDefinition/ValueSet"]
+          }
+        ]
+      },
+      "code": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Coding"
+          }
+        ]
+      }
+    }
+  },
+  "DataRequirementDateFilter": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "path": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "searchParam": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "value[x]": {
+        "type": [
+          {
+            "code": "dateTime"
+          },
+          {
+            "code": "Period"
+          },
+          {
+            "code": "Duration"
+          }
+        ]
+      }
+    }
+  },
+  "DataRequirementSort": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "path": {
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "direction": {
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      }
+    }
+  },
+  "Distance": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "value": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "comparator": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "unit": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "system": {
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "code": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      }
+    }
+  },
+  "Dosage": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "modifierExtension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "sequence": {
+        "type": [
+          {
+            "code": "integer"
+          }
+        ]
+      },
+      "text": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "additionalInstruction": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "patientInstruction": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "timing": {
+        "type": [
+          {
+            "code": "Timing"
+          }
+        ]
+      },
+      "asNeeded[x]": {
+        "type": [
+          {
+            "code": "boolean"
+          },
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "site": {
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "route": {
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "method": {
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "doseAndRate": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "DosageDoseAndRate"
+          }
+        ]
+      },
+      "maxDosePerPeriod": {
+        "type": [
+          {
+            "code": "Ratio"
+          }
+        ]
+      },
+      "maxDosePerAdministration": {
+        "type": [
+          {
+            "code": "Quantity",
+            "profile": ["http://hl7.org/fhir/StructureDefinition/SimpleQuantity"]
+          }
+        ]
+      },
+      "maxDosePerLifetime": {
+        "type": [
+          {
+            "code": "Quantity",
+            "profile": ["http://hl7.org/fhir/StructureDefinition/SimpleQuantity"]
+          }
+        ]
+      }
+    }
+  },
+  "DosageDoseAndRate": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "type": {
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "dose[x]": {
+        "type": [
+          {
+            "code": "Range"
+          },
+          {
+            "code": "Quantity",
+            "profile": ["http://hl7.org/fhir/StructureDefinition/SimpleQuantity"]
+          }
+        ]
+      },
+      "rate[x]": {
+        "type": [
+          {
+            "code": "Ratio"
+          },
+          {
+            "code": "Range"
+          },
+          {
+            "code": "Quantity",
+            "profile": ["http://hl7.org/fhir/StructureDefinition/SimpleQuantity"]
+          }
+        ]
+      }
+    }
+  },
+  "Duration": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "value": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "comparator": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "unit": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "system": {
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "code": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      }
+    }
+  },
+  "ElementDefinition": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "modifierExtension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "path": {
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "representation": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "sliceName": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "sliceIsConstraining": {
+        "type": [
+          {
+            "code": "boolean"
+          }
+        ]
+      },
+      "label": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "code": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Coding"
+          }
+        ]
+      },
+      "slicing": {
+        "type": [
+          {
+            "code": "ElementDefinitionSlicing"
+          }
+        ]
+      },
+      "short": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "definition": {
+        "type": [
+          {
+            "code": "markdown"
+          }
+        ]
+      },
+      "comment": {
+        "type": [
+          {
+            "code": "markdown"
+          }
+        ]
+      },
+      "requirements": {
+        "type": [
+          {
+            "code": "markdown"
+          }
+        ]
+      },
+      "alias": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "min": {
+        "type": [
+          {
+            "code": "unsignedInt"
+          }
+        ]
+      },
+      "max": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "base": {
+        "type": [
+          {
+            "code": "ElementDefinitionBase"
+          }
+        ]
+      },
+      "contentReference": {
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "type": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "ElementDefinitionType"
+          }
+        ]
+      },
+      "defaultValue[x]": {
+        "type": [
+          {
+            "code": "base64Binary"
+          },
+          {
+            "code": "boolean"
+          },
+          {
+            "code": "canonical"
+          },
+          {
+            "code": "code"
+          },
+          {
+            "code": "date"
+          },
+          {
+            "code": "dateTime"
+          },
+          {
+            "code": "decimal"
+          },
+          {
+            "code": "id"
+          },
+          {
+            "code": "instant"
+          },
+          {
+            "code": "integer"
+          },
+          {
+            "code": "markdown"
+          },
+          {
+            "code": "oid"
+          },
+          {
+            "code": "positiveInt"
+          },
+          {
+            "code": "string"
+          },
+          {
+            "code": "time"
+          },
+          {
+            "code": "unsignedInt"
+          },
+          {
+            "code": "uri"
+          },
+          {
+            "code": "url"
+          },
+          {
+            "code": "uuid"
+          },
+          {
+            "code": "Address"
+          },
+          {
+            "code": "Age"
+          },
+          {
+            "code": "Annotation"
+          },
+          {
+            "code": "Attachment"
+          },
+          {
+            "code": "CodeableConcept"
+          },
+          {
+            "code": "Coding"
+          },
+          {
+            "code": "ContactPoint"
+          },
+          {
+            "code": "Count"
+          },
+          {
+            "code": "Distance"
+          },
+          {
+            "code": "Duration"
+          },
+          {
+            "code": "HumanName"
+          },
+          {
+            "code": "Identifier"
+          },
+          {
+            "code": "Money"
+          },
+          {
+            "code": "Period"
+          },
+          {
+            "code": "Quantity"
+          },
+          {
+            "code": "Range"
+          },
+          {
+            "code": "Ratio"
+          },
+          {
+            "code": "Reference"
+          },
+          {
+            "code": "SampledData"
+          },
+          {
+            "code": "Signature"
+          },
+          {
+            "code": "Timing"
+          },
+          {
+            "code": "ContactDetail"
+          },
+          {
+            "code": "Contributor"
+          },
+          {
+            "code": "DataRequirement"
+          },
+          {
+            "code": "Expression"
+          },
+          {
+            "code": "ParameterDefinition"
+          },
+          {
+            "code": "RelatedArtifact"
+          },
+          {
+            "code": "TriggerDefinition"
+          },
+          {
+            "code": "UsageContext"
+          },
+          {
+            "code": "Dosage"
+          },
+          {
+            "code": "Meta"
+          }
+        ]
+      },
+      "meaningWhenMissing": {
+        "type": [
+          {
+            "code": "markdown"
+          }
+        ]
+      },
+      "orderMeaning": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "fixed[x]": {
+        "type": [
+          {
+            "code": "base64Binary"
+          },
+          {
+            "code": "boolean"
+          },
+          {
+            "code": "canonical"
+          },
+          {
+            "code": "code"
+          },
+          {
+            "code": "date"
+          },
+          {
+            "code": "dateTime"
+          },
+          {
+            "code": "decimal"
+          },
+          {
+            "code": "id"
+          },
+          {
+            "code": "instant"
+          },
+          {
+            "code": "integer"
+          },
+          {
+            "code": "markdown"
+          },
+          {
+            "code": "oid"
+          },
+          {
+            "code": "positiveInt"
+          },
+          {
+            "code": "string"
+          },
+          {
+            "code": "time"
+          },
+          {
+            "code": "unsignedInt"
+          },
+          {
+            "code": "uri"
+          },
+          {
+            "code": "url"
+          },
+          {
+            "code": "uuid"
+          },
+          {
+            "code": "Address"
+          },
+          {
+            "code": "Age"
+          },
+          {
+            "code": "Annotation"
+          },
+          {
+            "code": "Attachment"
+          },
+          {
+            "code": "CodeableConcept"
+          },
+          {
+            "code": "Coding"
+          },
+          {
+            "code": "ContactPoint"
+          },
+          {
+            "code": "Count"
+          },
+          {
+            "code": "Distance"
+          },
+          {
+            "code": "Duration"
+          },
+          {
+            "code": "HumanName"
+          },
+          {
+            "code": "Identifier"
+          },
+          {
+            "code": "Money"
+          },
+          {
+            "code": "Period"
+          },
+          {
+            "code": "Quantity"
+          },
+          {
+            "code": "Range"
+          },
+          {
+            "code": "Ratio"
+          },
+          {
+            "code": "Reference"
+          },
+          {
+            "code": "SampledData"
+          },
+          {
+            "code": "Signature"
+          },
+          {
+            "code": "Timing"
+          },
+          {
+            "code": "ContactDetail"
+          },
+          {
+            "code": "Contributor"
+          },
+          {
+            "code": "DataRequirement"
+          },
+          {
+            "code": "Expression"
+          },
+          {
+            "code": "ParameterDefinition"
+          },
+          {
+            "code": "RelatedArtifact"
+          },
+          {
+            "code": "TriggerDefinition"
+          },
+          {
+            "code": "UsageContext"
+          },
+          {
+            "code": "Dosage"
+          },
+          {
+            "code": "Meta"
+          }
+        ]
+      },
+      "pattern[x]": {
+        "type": [
+          {
+            "code": "base64Binary"
+          },
+          {
+            "code": "boolean"
+          },
+          {
+            "code": "canonical"
+          },
+          {
+            "code": "code"
+          },
+          {
+            "code": "date"
+          },
+          {
+            "code": "dateTime"
+          },
+          {
+            "code": "decimal"
+          },
+          {
+            "code": "id"
+          },
+          {
+            "code": "instant"
+          },
+          {
+            "code": "integer"
+          },
+          {
+            "code": "markdown"
+          },
+          {
+            "code": "oid"
+          },
+          {
+            "code": "positiveInt"
+          },
+          {
+            "code": "string"
+          },
+          {
+            "code": "time"
+          },
+          {
+            "code": "unsignedInt"
+          },
+          {
+            "code": "uri"
+          },
+          {
+            "code": "url"
+          },
+          {
+            "code": "uuid"
+          },
+          {
+            "code": "Address"
+          },
+          {
+            "code": "Age"
+          },
+          {
+            "code": "Annotation"
+          },
+          {
+            "code": "Attachment"
+          },
+          {
+            "code": "CodeableConcept"
+          },
+          {
+            "code": "Coding"
+          },
+          {
+            "code": "ContactPoint"
+          },
+          {
+            "code": "Count"
+          },
+          {
+            "code": "Distance"
+          },
+          {
+            "code": "Duration"
+          },
+          {
+            "code": "HumanName"
+          },
+          {
+            "code": "Identifier"
+          },
+          {
+            "code": "Money"
+          },
+          {
+            "code": "Period"
+          },
+          {
+            "code": "Quantity"
+          },
+          {
+            "code": "Range"
+          },
+          {
+            "code": "Ratio"
+          },
+          {
+            "code": "Reference"
+          },
+          {
+            "code": "SampledData"
+          },
+          {
+            "code": "Signature"
+          },
+          {
+            "code": "Timing"
+          },
+          {
+            "code": "ContactDetail"
+          },
+          {
+            "code": "Contributor"
+          },
+          {
+            "code": "DataRequirement"
+          },
+          {
+            "code": "Expression"
+          },
+          {
+            "code": "ParameterDefinition"
+          },
+          {
+            "code": "RelatedArtifact"
+          },
+          {
+            "code": "TriggerDefinition"
+          },
+          {
+            "code": "UsageContext"
+          },
+          {
+            "code": "Dosage"
+          },
+          {
+            "code": "Meta"
+          }
+        ]
+      },
+      "example": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "ElementDefinitionExample"
+          }
+        ]
+      },
+      "minValue[x]": {
+        "type": [
+          {
+            "code": "date"
+          },
+          {
+            "code": "dateTime"
+          },
+          {
+            "code": "instant"
+          },
+          {
+            "code": "time"
+          },
+          {
+            "code": "decimal"
+          },
+          {
+            "code": "integer"
+          },
+          {
+            "code": "positiveInt"
+          },
+          {
+            "code": "unsignedInt"
+          },
+          {
+            "code": "Quantity"
+          }
+        ]
+      },
+      "maxValue[x]": {
+        "type": [
+          {
+            "code": "date"
+          },
+          {
+            "code": "dateTime"
+          },
+          {
+            "code": "instant"
+          },
+          {
+            "code": "time"
+          },
+          {
+            "code": "decimal"
+          },
+          {
+            "code": "integer"
+          },
+          {
+            "code": "positiveInt"
+          },
+          {
+            "code": "unsignedInt"
+          },
+          {
+            "code": "Quantity"
+          }
+        ]
+      },
+      "maxLength": {
+        "type": [
+          {
+            "code": "integer"
+          }
+        ]
+      },
+      "condition": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "id"
+          }
+        ]
+      },
+      "constraint": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "ElementDefinitionConstraint"
+          }
+        ]
+      },
+      "mustSupport": {
+        "type": [
+          {
+            "code": "boolean"
+          }
+        ]
+      },
+      "isModifier": {
+        "type": [
+          {
+            "code": "boolean"
+          }
+        ]
+      },
+      "isModifierReason": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "isSummary": {
+        "type": [
+          {
+            "code": "boolean"
+          }
+        ]
+      },
+      "binding": {
+        "type": [
+          {
+            "code": "ElementDefinitionBinding"
+          }
+        ]
+      },
+      "mapping": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "ElementDefinitionMapping"
+          }
+        ]
+      }
+    }
+  },
+  "ElementDefinitionSlicingDiscriminator": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "type": {
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "path": {
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      }
+    }
+  },
+  "ElementDefinitionSlicing": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "discriminator": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "ElementDefinitionSlicingDiscriminator"
+          }
+        ]
+      },
+      "description": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "ordered": {
+        "type": [
+          {
+            "code": "boolean"
+          }
+        ]
+      },
+      "rules": {
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      }
+    }
+  },
+  "ElementDefinitionBase": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "path": {
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "min": {
+        "min": 1,
+        "type": [
+          {
+            "code": "unsignedInt"
+          }
+        ]
+      },
+      "max": {
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      }
+    }
+  },
+  "ElementDefinitionType": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "code": {
+        "min": 1,
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "profile": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "canonical",
+            "targetProfile": [
+              "http://hl7.org/fhir/StructureDefinition/StructureDefinition",
+              "http://hl7.org/fhir/StructureDefinition/ImplementationGuide"
+            ]
+          }
+        ]
+      },
+      "targetProfile": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "canonical",
+            "targetProfile": [
+              "http://hl7.org/fhir/StructureDefinition/StructureDefinition",
+              "http://hl7.org/fhir/StructureDefinition/ImplementationGuide"
+            ]
+          }
+        ]
+      },
+      "aggregation": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "versioning": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      }
+    }
+  },
+  "ElementDefinitionExample": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "label": {
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "value[x]": {
+        "min": 1,
+        "type": [
+          {
+            "code": "base64Binary"
+          },
+          {
+            "code": "boolean"
+          },
+          {
+            "code": "canonical"
+          },
+          {
+            "code": "code"
+          },
+          {
+            "code": "date"
+          },
+          {
+            "code": "dateTime"
+          },
+          {
+            "code": "decimal"
+          },
+          {
+            "code": "id"
+          },
+          {
+            "code": "instant"
+          },
+          {
+            "code": "integer"
+          },
+          {
+            "code": "markdown"
+          },
+          {
+            "code": "oid"
+          },
+          {
+            "code": "positiveInt"
+          },
+          {
+            "code": "string"
+          },
+          {
+            "code": "time"
+          },
+          {
+            "code": "unsignedInt"
+          },
+          {
+            "code": "uri"
+          },
+          {
+            "code": "url"
+          },
+          {
+            "code": "uuid"
+          },
+          {
+            "code": "Address"
+          },
+          {
+            "code": "Age"
+          },
+          {
+            "code": "Annotation"
+          },
+          {
+            "code": "Attachment"
+          },
+          {
+            "code": "CodeableConcept"
+          },
+          {
+            "code": "Coding"
+          },
+          {
+            "code": "ContactPoint"
+          },
+          {
+            "code": "Count"
+          },
+          {
+            "code": "Distance"
+          },
+          {
+            "code": "Duration"
+          },
+          {
+            "code": "HumanName"
+          },
+          {
+            "code": "Identifier"
+          },
+          {
+            "code": "Money"
+          },
+          {
+            "code": "Period"
+          },
+          {
+            "code": "Quantity"
+          },
+          {
+            "code": "Range"
+          },
+          {
+            "code": "Ratio"
+          },
+          {
+            "code": "Reference"
+          },
+          {
+            "code": "SampledData"
+          },
+          {
+            "code": "Signature"
+          },
+          {
+            "code": "Timing"
+          },
+          {
+            "code": "ContactDetail"
+          },
+          {
+            "code": "Contributor"
+          },
+          {
+            "code": "DataRequirement"
+          },
+          {
+            "code": "Expression"
+          },
+          {
+            "code": "ParameterDefinition"
+          },
+          {
+            "code": "RelatedArtifact"
+          },
+          {
+            "code": "TriggerDefinition"
+          },
+          {
+            "code": "UsageContext"
+          },
+          {
+            "code": "Dosage"
+          },
+          {
+            "code": "Meta"
+          }
+        ]
+      }
+    }
+  },
+  "ElementDefinitionConstraint": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "key": {
+        "min": 1,
+        "type": [
+          {
+            "code": "id"
+          }
+        ]
+      },
+      "requirements": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "severity": {
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "human": {
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "expression": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "xpath": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "source": {
+        "type": [
+          {
+            "code": "canonical",
+            "targetProfile": ["http://hl7.org/fhir/StructureDefinition/StructureDefinition"]
+          }
+        ]
+      }
+    }
+  },
+  "ElementDefinitionBinding": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "strength": {
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "description": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "valueSet": {
+        "type": [
+          {
+            "code": "canonical",
+            "targetProfile": ["http://hl7.org/fhir/StructureDefinition/ValueSet"]
+          }
+        ]
+      }
+    }
+  },
+  "ElementDefinitionMapping": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "identity": {
+        "min": 1,
+        "type": [
+          {
+            "code": "id"
+          }
+        ]
+      },
+      "language": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "map": {
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "comment": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      }
+    }
+  },
+  "Expression": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "description": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "name": {
+        "type": [
+          {
+            "code": "id"
+          }
+        ]
+      },
+      "language": {
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "expression": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "reference": {
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      }
+    }
+  },
+  "Extension": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "url": {
+        "min": 1,
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "value[x]": {
+        "type": [
+          {
+            "code": "base64Binary"
+          },
+          {
+            "code": "boolean"
+          },
+          {
+            "code": "canonical"
+          },
+          {
+            "code": "code"
+          },
+          {
+            "code": "date"
+          },
+          {
+            "code": "dateTime"
+          },
+          {
+            "code": "decimal"
+          },
+          {
+            "code": "id"
+          },
+          {
+            "code": "instant"
+          },
+          {
+            "code": "integer"
+          },
+          {
+            "code": "markdown"
+          },
+          {
+            "code": "oid"
+          },
+          {
+            "code": "positiveInt"
+          },
+          {
+            "code": "string"
+          },
+          {
+            "code": "time"
+          },
+          {
+            "code": "unsignedInt"
+          },
+          {
+            "code": "uri"
+          },
+          {
+            "code": "url"
+          },
+          {
+            "code": "uuid"
+          },
+          {
+            "code": "Address"
+          },
+          {
+            "code": "Age"
+          },
+          {
+            "code": "Annotation"
+          },
+          {
+            "code": "Attachment"
+          },
+          {
+            "code": "CodeableConcept"
+          },
+          {
+            "code": "Coding"
+          },
+          {
+            "code": "ContactPoint"
+          },
+          {
+            "code": "Count"
+          },
+          {
+            "code": "Distance"
+          },
+          {
+            "code": "Duration"
+          },
+          {
+            "code": "HumanName"
+          },
+          {
+            "code": "Identifier"
+          },
+          {
+            "code": "Money"
+          },
+          {
+            "code": "Period"
+          },
+          {
+            "code": "Quantity"
+          },
+          {
+            "code": "Range"
+          },
+          {
+            "code": "Ratio"
+          },
+          {
+            "code": "Reference"
+          },
+          {
+            "code": "SampledData"
+          },
+          {
+            "code": "Signature"
+          },
+          {
+            "code": "Timing"
+          },
+          {
+            "code": "ContactDetail"
+          },
+          {
+            "code": "Contributor"
+          },
+          {
+            "code": "DataRequirement"
+          },
+          {
+            "code": "Expression"
+          },
+          {
+            "code": "ParameterDefinition"
+          },
+          {
+            "code": "RelatedArtifact"
+          },
+          {
+            "code": "TriggerDefinition"
+          },
+          {
+            "code": "UsageContext"
+          },
+          {
+            "code": "Dosage"
+          },
+          {
+            "code": "Meta"
+          }
+        ]
+      }
+    }
+  },
+  "HumanName": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "use": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "text": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "family": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "given": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "prefix": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "suffix": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "period": {
+        "type": [
+          {
+            "code": "Period"
+          }
+        ]
+      }
+    }
+  },
+  "Identifier": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "use": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "type": {
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "system": {
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "value": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "period": {
+        "type": [
+          {
+            "code": "Period"
+          }
+        ]
+      },
+      "assigner": {
+        "type": [
+          {
+            "code": "Reference",
+            "targetProfile": ["http://hl7.org/fhir/StructureDefinition/Organization"]
+          }
+        ]
+      }
+    }
+  },
+  "MarketingStatus": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "modifierExtension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "country": {
+        "min": 1,
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "jurisdiction": {
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "status": {
+        "min": 1,
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "dateRange": {
+        "min": 1,
+        "type": [
+          {
+            "code": "Period"
+          }
+        ]
+      },
+      "restoreDate": {
+        "type": [
+          {
+            "code": "dateTime"
+          }
+        ]
+      }
+    }
+  },
+  "Meta": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "versionId": {
+        "type": [
+          {
+            "code": "id"
+          }
+        ]
+      },
+      "lastUpdated": {
+        "type": [
+          {
+            "code": "instant"
+          }
+        ]
+      },
+      "source": {
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "profile": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "canonical",
+            "targetProfile": ["http://hl7.org/fhir/StructureDefinition/StructureDefinition"]
+          }
+        ]
+      },
+      "security": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Coding"
+          }
+        ]
+      },
+      "tag": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Coding"
+          }
+        ]
+      },
+      "project": {
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "author": {
+        "type": [
+          {
+            "code": "Reference"
+          }
+        ]
+      },
+      "onBehalfOf": {
+        "type": [
+          {
+            "code": "Reference"
+          }
+        ]
+      },
+      "account": {
+        "type": [
+          {
+            "code": "Reference"
+          }
+        ]
+      },
+      "accounts": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Reference"
+          }
+        ]
+      },
+      "compartment": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Reference"
+          }
+        ]
+      },
+      "deleted": {
+        "type": [
+          {
+            "code": "boolean"
+          }
+        ]
+      }
+    }
+  },
+  "Money": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "value": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "currency": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      }
+    }
+  },
+  "Narrative": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "status": {
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "div": {
+        "min": 1,
+        "type": [
+          {
+            "code": "xhtml"
+          }
+        ]
+      }
+    }
+  },
+  "ParameterDefinition": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "name": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "use": {
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "min": {
+        "type": [
+          {
+            "code": "integer"
+          }
+        ]
+      },
+      "max": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "documentation": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "type": {
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "profile": {
+        "type": [
+          {
+            "code": "canonical",
+            "targetProfile": ["http://hl7.org/fhir/StructureDefinition/StructureDefinition"]
+          }
+        ]
+      }
+    }
+  },
+  "Period": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "start": {
+        "type": [
+          {
+            "code": "dateTime"
+          }
+        ]
+      },
+      "end": {
+        "type": [
+          {
+            "code": "dateTime"
+          }
+        ]
+      }
+    }
+  },
+  "Population": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "modifierExtension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "age[x]": {
+        "type": [
+          {
+            "code": "Range"
+          },
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "gender": {
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "race": {
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "physiologicalCondition": {
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      }
+    }
+  },
+  "ProdCharacteristic": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "modifierExtension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "height": {
+        "type": [
+          {
+            "code": "Quantity"
+          }
+        ]
+      },
+      "width": {
+        "type": [
+          {
+            "code": "Quantity"
+          }
+        ]
+      },
+      "depth": {
+        "type": [
+          {
+            "code": "Quantity"
+          }
+        ]
+      },
+      "weight": {
+        "type": [
+          {
+            "code": "Quantity"
+          }
+        ]
+      },
+      "nominalVolume": {
+        "type": [
+          {
+            "code": "Quantity"
+          }
+        ]
+      },
+      "externalDiameter": {
+        "type": [
+          {
+            "code": "Quantity"
+          }
+        ]
+      },
+      "shape": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "color": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "imprint": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "image": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Attachment"
+          }
+        ]
+      },
+      "scoring": {
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      }
+    }
+  },
+  "ProductShelfLife": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "modifierExtension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "identifier": {
+        "type": [
+          {
+            "code": "Identifier"
+          }
+        ]
+      },
+      "type": {
+        "min": 1,
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "period": {
+        "min": 1,
+        "type": [
+          {
+            "code": "Quantity"
+          }
+        ]
+      },
+      "specialPrecautionsForStorage": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      }
+    }
+  },
+  "Quantity": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "value": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "comparator": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "unit": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "system": {
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "code": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      }
+    }
+  },
+  "Range": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "low": {
+        "type": [
+          {
+            "code": "Quantity",
+            "profile": ["http://hl7.org/fhir/StructureDefinition/SimpleQuantity"]
+          }
+        ]
+      },
+      "high": {
+        "type": [
+          {
+            "code": "Quantity",
+            "profile": ["http://hl7.org/fhir/StructureDefinition/SimpleQuantity"]
+          }
+        ]
+      }
+    }
+  },
+  "Ratio": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "numerator": {
+        "type": [
+          {
+            "code": "Quantity"
+          }
+        ]
+      },
+      "denominator": {
+        "type": [
+          {
+            "code": "Quantity"
+          }
+        ]
+      }
+    }
+  },
+  "Reference": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "reference": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "type": {
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "identifier": {
+        "type": [
+          {
+            "code": "Identifier"
+          }
+        ]
+      },
+      "display": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      }
+    }
+  },
+  "RelatedArtifact": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "type": {
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "label": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "display": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "citation": {
+        "type": [
+          {
+            "code": "markdown"
+          }
+        ]
+      },
+      "url": {
+        "type": [
+          {
+            "code": "url"
+          }
+        ]
+      },
+      "document": {
+        "type": [
+          {
+            "code": "Attachment"
+          }
+        ]
+      },
+      "resource": {
+        "type": [
+          {
+            "code": "canonical",
+            "targetProfile": ["http://hl7.org/fhir/StructureDefinition/Resource"]
+          }
+        ]
+      }
+    }
+  },
+  "SampledData": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "origin": {
+        "min": 1,
+        "type": [
+          {
+            "code": "Quantity",
+            "profile": ["http://hl7.org/fhir/StructureDefinition/SimpleQuantity"]
+          }
+        ]
+      },
+      "period": {
+        "min": 1,
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "factor": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "lowerLimit": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "upperLimit": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "dimensions": {
+        "min": 1,
+        "type": [
+          {
+            "code": "positiveInt"
+          }
+        ]
+      },
+      "data": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      }
+    }
+  },
+  "Signature": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "type": {
+        "min": 1,
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Coding"
+          }
+        ]
+      },
+      "when": {
+        "min": 1,
+        "type": [
+          {
+            "code": "instant"
+          }
+        ]
+      },
+      "who": {
+        "min": 1,
+        "type": [
+          {
+            "code": "Reference",
+            "targetProfile": [
+              "http://hl7.org/fhir/StructureDefinition/Practitioner",
+              "http://hl7.org/fhir/StructureDefinition/PractitionerRole",
+              "http://hl7.org/fhir/StructureDefinition/RelatedPerson",
+              "http://hl7.org/fhir/StructureDefinition/Patient",
+              "http://hl7.org/fhir/StructureDefinition/Device",
+              "http://hl7.org/fhir/StructureDefinition/Organization"
+            ]
+          }
+        ]
+      },
+      "onBehalfOf": {
+        "type": [
+          {
+            "code": "Reference",
+            "targetProfile": [
+              "http://hl7.org/fhir/StructureDefinition/Practitioner",
+              "http://hl7.org/fhir/StructureDefinition/PractitionerRole",
+              "http://hl7.org/fhir/StructureDefinition/RelatedPerson",
+              "http://hl7.org/fhir/StructureDefinition/Patient",
+              "http://hl7.org/fhir/StructureDefinition/Device",
+              "http://hl7.org/fhir/StructureDefinition/Organization"
+            ]
+          }
+        ]
+      },
+      "targetFormat": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "sigFormat": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "data": {
+        "type": [
+          {
+            "code": "base64Binary"
+          }
+        ]
+      }
+    }
+  },
+  "SubstanceAmount": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "modifierExtension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "amount[x]": {
+        "type": [
+          {
+            "code": "Quantity"
+          },
+          {
+            "code": "Range"
+          },
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "amountType": {
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      },
+      "amountText": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "referenceRange": {
+        "type": [
+          {
+            "code": "SubstanceAmountReferenceRange"
+          }
+        ]
+      }
+    }
+  },
+  "SubstanceAmountReferenceRange": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "lowLimit": {
+        "type": [
+          {
+            "code": "Quantity"
+          }
+        ]
+      },
+      "highLimit": {
+        "type": [
+          {
+            "code": "Quantity"
+          }
+        ]
+      }
+    }
+  },
+  "Timing": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "modifierExtension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "event": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "dateTime"
+          }
+        ]
+      },
+      "repeat": {
+        "type": [
+          {
+            "code": "TimingRepeat"
+          }
+        ]
+      },
+      "code": {
+        "type": [
+          {
+            "code": "CodeableConcept"
+          }
+        ]
+      }
+    }
+  },
+  "TimingRepeat": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "bounds[x]": {
+        "type": [
+          {
+            "code": "Duration"
+          },
+          {
+            "code": "Range"
+          },
+          {
+            "code": "Period"
+          }
+        ]
+      },
+      "count": {
+        "type": [
+          {
+            "code": "positiveInt"
+          }
+        ]
+      },
+      "countMax": {
+        "type": [
+          {
+            "code": "positiveInt"
+          }
+        ]
+      },
+      "duration": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "durationMax": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "durationUnit": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "frequency": {
+        "type": [
+          {
+            "code": "positiveInt"
+          }
+        ]
+      },
+      "frequencyMax": {
+        "type": [
+          {
+            "code": "positiveInt"
+          }
+        ]
+      },
+      "period": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "periodMax": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "periodUnit": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "dayOfWeek": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "timeOfDay": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "time"
+          }
+        ]
+      },
+      "when": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "offset": {
+        "type": [
+          {
+            "code": "unsignedInt"
+          }
+        ]
+      }
+    }
+  },
+  "TriggerDefinition": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "type": {
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "name": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "timing[x]": {
+        "type": [
+          {
+            "code": "Timing"
+          },
+          {
+            "code": "Reference",
+            "targetProfile": ["http://hl7.org/fhir/StructureDefinition/Schedule"]
+          },
+          {
+            "code": "date"
+          },
+          {
+            "code": "dateTime"
+          }
+        ]
+      },
+      "data": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "DataRequirement"
+          }
+        ]
+      },
+      "condition": {
+        "type": [
+          {
+            "code": "Expression"
+          }
+        ]
+      }
+    }
+  },
+  "UsageContext": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "code": {
+        "min": 1,
+        "type": [
+          {
+            "code": "Coding"
+          }
+        ]
+      },
+      "value[x]": {
+        "min": 1,
+        "type": [
+          {
+            "code": "CodeableConcept"
+          },
+          {
+            "code": "Quantity"
+          },
+          {
+            "code": "Range"
+          },
+          {
+            "code": "Reference",
+            "targetProfile": [
+              "http://hl7.org/fhir/StructureDefinition/PlanDefinition",
+              "http://hl7.org/fhir/StructureDefinition/ResearchStudy",
+              "http://hl7.org/fhir/StructureDefinition/InsurancePlan",
+              "http://hl7.org/fhir/StructureDefinition/HealthcareService",
+              "http://hl7.org/fhir/StructureDefinition/Group",
+              "http://hl7.org/fhir/StructureDefinition/Location",
+              "http://hl7.org/fhir/StructureDefinition/Organization"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "MoneyQuantity": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "value": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "comparator": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "unit": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "system": {
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "code": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      }
+    }
+  },
+  "SimpleQuantity": {
+    "elements": {
+      "id": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "extension": {
+        "max": 9007199254740991,
+        "type": [
+          {
+            "code": "Extension"
+          }
+        ]
+      },
+      "value": {
+        "type": [
+          {
+            "code": "decimal"
+          }
+        ]
+      },
+      "comparator": {
+        "max": 0,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "unit": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "system": {
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      "code": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      }
+    }
+  },
+  "IdentityProvider": {
+    "elements": {
+      "authorizeUrl": {
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "tokenUrl": {
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "tokenAuthMethod": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "userInfoUrl": {
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "userInfoMode": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "userInfoApiKey": {
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "clientId": {
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "clientSecret": {
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      "usePkce": {
+        "type": [
+          {
+            "code": "boolean"
+          }
+        ]
+      },
+      "useSubject": {
+        "type": [
+          {
+            "code": "boolean"
+          }
+        ]
+      },
+      "identitySource": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      "identityMappingMode": {
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      }
+    }
+  }
+}

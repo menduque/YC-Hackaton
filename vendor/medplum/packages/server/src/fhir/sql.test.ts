@@ -1,0 +1,604 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { Client, PoolClient } from 'pg';
+import { globalLogger } from '../logger';
+import type { CTE, Operator, PgQueryable } from './sql';
+import {
+  Column,
+  Condition,
+  Constant,
+  Disjunction,
+  InsertQuery,
+  IsNull,
+  isPoolClient,
+  isValidColumnName,
+  isValidTableName,
+  MAX_INDEX_DATA_BYTES,
+  Negation,
+  periodToRangeString,
+  resetSqlDebug,
+  SelectQuery,
+  setSqlDebug,
+  SqlBuilder,
+  Subquery,
+  truncateTextColumn,
+  UnionAllBuilder,
+  UpdateQuery,
+  ValuesQuery,
+} from './sql';
+
+describe('SqlBuilder', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  describe('SelectQuery', () => {
+    test('Select', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable').column('id').column('name').buildSql(sql);
+      expect(sql.toString()).toBe('SELECT "MyTable"."id", "MyTable"."name" FROM "MyTable"');
+    });
+
+    test('Select where', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable').column('id').where('name', '=', 'x').buildSql(sql);
+      expect(sql.toString()).toBe('SELECT "MyTable"."id" FROM "MyTable" WHERE "MyTable"."name" = $1');
+    });
+
+    test('Select where expression', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable')
+        .column('id')
+        .whereExpr(new Condition('name', '=', 'x'))
+        .buildSql(sql);
+      expect(sql.toString()).toBe('SELECT "MyTable"."id" FROM "MyTable" WHERE "name" = $1');
+    });
+
+    test('Select where negation', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable')
+        .column('id')
+        .whereExpr(new Negation(new Condition('name', '=', 'x')))
+        .buildSql(sql);
+      expect(sql.toString()).toBe('SELECT "MyTable"."id" FROM "MyTable" WHERE NOT ("name" = $1)');
+    });
+
+    describe('array contains', () => {
+      test('single value', () => {
+        const sql = new SqlBuilder();
+        new SelectQuery('MyTable').column('id').where('name', 'ARRAY_OVERLAPS', 'x', 'TEXT[]').buildSql(sql);
+        expect(sql.toString()).toBe('SELECT "MyTable"."id" FROM "MyTable" WHERE "MyTable"."name" @> ARRAY[$1]::TEXT[]');
+      });
+
+      test('multiple values', () => {
+        const sql = new SqlBuilder();
+        new SelectQuery('MyTable').column('id').where('name', 'ARRAY_OVERLAPS', ['x', 'y'], 'TEXT[]').buildSql(sql);
+        expect(sql.toString()).toBe(
+          'SELECT "MyTable"."id" FROM "MyTable" WHERE "MyTable"."name" && ARRAY[$1,$2]::TEXT[]'
+        );
+      });
+
+      test('missing param type', () => {
+        const sql = new SqlBuilder();
+        expect(() =>
+          new SelectQuery('MyTable').column('id').where('name', 'ARRAY_OVERLAPS', 'x').buildSql(sql)
+        ).toThrow('ARRAY_OVERLAPS requires paramType');
+      });
+    });
+
+    describe('array contains and is not null', () => {
+      test('single value', () => {
+        const sql = new SqlBuilder();
+        new SelectQuery('MyTable')
+          .column('id')
+          .where('name', 'ARRAY_OVERLAPS_AND_IS_NOT_NULL', 'x', 'TEXT[]')
+          .buildSql(sql);
+        expect(sql.toString()).toBe(
+          'SELECT "MyTable"."id" FROM "MyTable" WHERE ("MyTable"."name" IS NOT NULL AND "MyTable"."name" @> ARRAY[$1]::TEXT[])'
+        );
+      });
+
+      test('multiple values', () => {
+        const sql = new SqlBuilder();
+        new SelectQuery('MyTable')
+          .column('id')
+          .where('name', 'ARRAY_OVERLAPS_AND_IS_NOT_NULL', new Set(['x', 'y']), 'TEXT[]')
+          .buildSql(sql);
+        expect(sql.toString()).toBe(
+          'SELECT "MyTable"."id" FROM "MyTable" WHERE ("MyTable"."name" IS NOT NULL AND "MyTable"."name" && ARRAY[$1,$2]::TEXT[])'
+        );
+      });
+
+      test('missing param type', () => {
+        const sql = new SqlBuilder();
+        expect(() =>
+          new SelectQuery('MyTable').column('id').where('name', 'ARRAY_OVERLAPS_AND_IS_NOT_NULL', 'x').buildSql(sql)
+        ).toThrow('ARRAY_OVERLAPS_AND_IS_NOT_NULL requires paramType');
+      });
+    });
+
+    test('Select where is null', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable').column('id').where('name', '=', null).buildSql(sql);
+      expect(sql.toString()).toBe('SELECT "MyTable"."id" FROM "MyTable" WHERE "MyTable"."name" IS NULL');
+    });
+
+    test('Select where is not null', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable').column('id').where('name', '!=', null).buildSql(sql);
+      expect(sql.toString()).toBe('SELECT "MyTable"."id" FROM "MyTable" WHERE "MyTable"."name" IS NOT NULL');
+    });
+
+    test('Select where is null expression', () => {
+      const sql = new SqlBuilder();
+      const maxSubquery = new SelectQuery('MyTable').raw('MAX(name)');
+      new SelectQuery('MyOtherTable')
+        .column('id')
+        .whereExpr(new IsNull(new Subquery(maxSubquery)))
+        .buildSql(sql);
+      expect(sql.toString()).toBe(
+        'SELECT "MyOtherTable"."id" FROM "MyOtherTable" WHERE (SELECT MAX(name) FROM "MyTable") IS NULL'
+      );
+    });
+
+    test('Select where is not null expression', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable')
+        .column('id')
+        .whereExpr(new Condition(new Column('MyTable', 'name'), '!=', null))
+        .buildSql(sql);
+      expect(sql.toString()).toBe('SELECT "MyTable"."id" FROM "MyTable" WHERE "MyTable"."name" IS NOT NULL');
+    });
+
+    test('Select where is null expression in disjunction', () => {
+      const sql = new SqlBuilder();
+      const maxSubquery = new SelectQuery('MyTable').raw('MAX(ts)');
+      new SelectQuery('MyOtherTable')
+        .column('id')
+        .whereExpr(new Disjunction([new IsNull(new Subquery(maxSubquery)), new Condition('ts', '>', 'x')]))
+        .buildSql(sql);
+      expect(sql.toString()).toBe(
+        'SELECT "MyOtherTable"."id" FROM "MyOtherTable" WHERE ((SELECT MAX(ts) FROM "MyTable") IS NULL OR "ts" > $1)'
+      );
+    });
+
+    test('Select where greater than subquery', () => {
+      const sql = new SqlBuilder();
+      const maxSubquery = new SelectQuery('MyTable').raw('MAX(name)');
+      new SelectQuery('MyOtherTable').column('id').where('name', '>', new Subquery(maxSubquery)).buildSql(sql);
+      expect(sql.toString()).toBe(
+        'SELECT "MyOtherTable"."id" FROM "MyOtherTable" WHERE "MyOtherTable"."name" > (SELECT MAX(name) FROM "MyTable")'
+      );
+    });
+
+    test('Select where greater than subquery expression', () => {
+      const sql = new SqlBuilder();
+      const maxSubquery = new SelectQuery('MyTable').raw('MAX(name)');
+      new SelectQuery('MyOtherTable')
+        .column('id')
+        .whereExpr(new Condition('name', '>', new Subquery(maxSubquery)))
+        .buildSql(sql);
+      expect(sql.toString()).toBe(
+        'SELECT "MyOtherTable"."id" FROM "MyOtherTable" WHERE "name" > (SELECT MAX(name) FROM "MyTable")'
+      );
+    });
+
+    test('Select value in subquery with type', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable')
+        .column('id')
+        .where('name', 'IN_SUBQUERY', new SelectQuery('MyLookup').column('values'), 'TEXT[]')
+        .buildSql(sql);
+      expect(sql.toString()).toBe(
+        'SELECT "MyTable"."id" FROM "MyTable" WHERE "MyTable"."name"=ANY((SELECT "MyLookup"."values" FROM "MyLookup")::TEXT[])'
+      );
+    });
+
+    test('Select value in subquery without type', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable')
+        .column('id')
+        .where('name', 'IN_SUBQUERY', new SelectQuery('MyLookup').column('values'))
+        .buildSql(sql);
+      expect(sql.toString()).toBe(
+        'SELECT "MyTable"."id" FROM "MyTable" WHERE "MyTable"."name"=ANY(SELECT "MyLookup"."values" FROM "MyLookup")'
+      );
+    });
+
+    test('Select group by', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable').column('id').groupBy('name').groupBy(new Column('MyTable', 'email')).buildSql(sql);
+      expect(sql.toString()).toBe('SELECT "MyTable"."id" FROM "MyTable" GROUP BY "MyTable"."name", "MyTable"."email"');
+    });
+
+    test('Select distinct on', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable')
+        .column('id')
+        .column('name')
+        .distinctOn('id')
+        .distinctOn(new Column('MyTable', 'name'))
+        .buildSql(sql);
+      expect(sql.toString()).toBe(
+        'SELECT DISTINCT ON ("MyTable"."id", "MyTable"."name") "MyTable"."id", "MyTable"."name" FROM "MyTable"'
+      );
+    });
+
+    test('Select with subquery', () => {
+      const sql = new SqlBuilder();
+
+      const joinName = 'T1';
+      const joinOnExpression = new Condition(new Column(joinName, 'id'), '=', new Column('MyJoinTable', 'id'));
+
+      new SelectQuery('MyTable')
+        .column('id')
+        .join('INNER JOIN', new SelectQuery('MyJoinTable').column('id'), joinName, joinOnExpression)
+        .buildSql(sql);
+
+      expect(sql.toString()).toBe(
+        'SELECT "MyTable"."id" FROM "MyTable" INNER JOIN (SELECT "MyJoinTable"."id" FROM "MyJoinTable") AS "T1" ON "T1"."id" = "MyJoinTable"."id"'
+      );
+    });
+
+    test('Select with simple lateral join', () => {
+      const sql = new SqlBuilder();
+
+      const joinName = 'T1';
+      const joinOnExpression = new Constant('true');
+
+      new SelectQuery('MyTable')
+        .column('id')
+        .join('LEFT JOIN LATERAL', new SelectQuery('MyJoinTable').column('id'), joinName, joinOnExpression)
+        .buildSql(sql);
+
+      expect(sql.toString()).toBe(
+        'SELECT "MyTable"."id" FROM "MyTable" LEFT JOIN LATERAL (SELECT "MyJoinTable"."id" FROM "MyJoinTable") AS "T1" ON true'
+      );
+    });
+
+    test('Select with realistic lateral join', () => {
+      const sql = new SqlBuilder();
+
+      const joinName = 'T1';
+      const joinOnExpression = new Constant('true');
+
+      new SelectQuery('Patient')
+        .column('id')
+        .join(
+          'LEFT JOIN LATERAL',
+          new SelectQuery('HumanName')
+            .column('resourceId')
+            .column('name')
+            .where(new Column('HumanName', 'resourceId'), '=', new Column('Patient', 'id'))
+            .orderBy(new Column('HumanName', 'resourceId'), false)
+            .limit(1),
+          joinName,
+          joinOnExpression
+        )
+        .orderBy(new Column('T1', 'name'), false)
+        .buildSql(sql);
+
+      expect(sql.toString()).toBe(
+        'SELECT "Patient"."id" FROM "Patient" LEFT JOIN LATERAL (SELECT "HumanName"."resourceId", "HumanName"."name" FROM "HumanName" WHERE "HumanName"."resourceId" = "Patient"."id" ORDER BY "HumanName"."resourceId" LIMIT 1) AS "T1" ON true ORDER BY "T1"."name"'
+      );
+    });
+
+    test('Select distinct on sorting', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable')
+        .column('id')
+        .column('name')
+        .column('email')
+        .distinctOn('id')
+        .distinctOn(new Column('MyTable', 'name'))
+        .orderBy('email')
+        .buildSql(sql);
+      expect(sql.toString()).toBe(
+        'SELECT DISTINCT ON ("MyTable"."id", "MyTable"."name") "MyTable"."id", "MyTable"."name", "MyTable"."email" FROM "MyTable" ORDER BY "MyTable"."id", "MyTable"."name", "MyTable"."email"'
+      );
+    });
+
+    test('Select where not equals', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable').column('id').where('name', '!=', 'x').buildSql(sql);
+      expect(sql.toString()).toBe('SELECT "MyTable"."id" FROM "MyTable" WHERE "MyTable"."name" <> $1');
+    });
+
+    test('Select where not equals empty string', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable').column('id').where('name', '!=', '').buildSql(sql);
+      expect(sql.toString()).toBe('SELECT "MyTable"."id" FROM "MyTable" WHERE "MyTable"."name" <> $1');
+      expect(sql.getValues()).toStrictEqual(['']);
+    });
+
+    test('Select where not equals empty string w/ typed column', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable').column('id').where(new Column('MyTable', 'name'), '!=', '').buildSql(sql);
+      expect(sql.toString()).toBe('SELECT "MyTable"."id" FROM "MyTable" WHERE "MyTable"."name" <> $1');
+      expect(sql.getValues()).toStrictEqual(['']);
+    });
+
+    test('Select where lower like', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable').column('id').where('name', 'LOWER_LIKE', 'x').buildSql(sql);
+      expect(sql.toString()).toBe('SELECT "MyTable"."id" FROM "MyTable" WHERE LOWER("MyTable"."name") LIKE $1');
+    });
+
+    test('Select where ilike', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable').column('id').where('name', 'ILIKE', 'x').buildSql(sql);
+      expect(sql.toString()).toBe('SELECT "MyTable"."id" FROM "MyTable" WHERE "MyTable"."name" ILIKE $1');
+    });
+
+    test('Select missing columns', () => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable').buildSql(sql);
+      expect(sql.toString()).toEqual(`SELECT 1 FROM "MyTable"`);
+    });
+
+    test('periodToRangeString', () => {
+      expect(periodToRangeString({})).toBeUndefined();
+      expect(periodToRangeString({ start: '2020-01-01' })).toBe('[2020-01-01,]');
+      expect(periodToRangeString({ end: '2020-01-01' })).toBe('[,2020-01-01]');
+      expect(periodToRangeString({ start: '2020-01-01', end: '2020-01-02' })).toBe('[2020-01-01,2020-01-02]');
+    });
+
+    test('Debug mode', async () => {
+      const writeSpy = vi.spyOn(globalLogger, 'write' as any).mockImplementation(() => undefined);
+
+      const sql = new SqlBuilder();
+      sql.debug = 'true';
+      new SelectQuery('MyTable').column('id').buildSql(sql);
+      expect(sql.toString()).toBe('SELECT "MyTable"."id" FROM "MyTable"');
+
+      const conn = {
+        query: vi.fn(() => ({ rows: [] })),
+      } as unknown as Client;
+
+      await sql.execute(conn);
+      expect(writeSpy).toHaveBeenCalledWith('sql SELECT "MyTable"."id" FROM "MyTable"');
+      writeSpy.mockRestore();
+    });
+
+    test('Empty insert is no-op', async () => {
+      const db = { query: vi.fn() } as unknown as PoolClient;
+      await expect(new InsertQuery('Patient', []).execute(db)).resolves.toStrictEqual([]);
+      expect(db.query).not.toHaveBeenCalled();
+    });
+
+    test('Insert into select', () => {
+      const sql = new SqlBuilder();
+      new InsertQuery('MyTable', new SelectQuery('MyOtherTable').column('id').where('active', '=', true)).buildSql(sql);
+      expect(sql.toString()).toBe(
+        'INSERT INTO "MyTable" SELECT "MyOtherTable"."id" FROM "MyOtherTable" WHERE "MyOtherTable"."active" = $1'
+      );
+      expect(sql.getValues()).toStrictEqual([true]);
+    });
+
+    test('Insert into select with target columns', () => {
+      const sql = new SqlBuilder();
+      new InsertQuery('MyTable', new SelectQuery('MyOtherTable').column('sourceId').column('sourceName'), [
+        'id',
+        'name',
+      ]).buildSql(sql);
+      expect(sql.toString()).toBe(
+        'INSERT INTO "MyTable" ("id", "name") SELECT "MyOtherTable"."sourceId", "MyOtherTable"."sourceName" FROM "MyOtherTable"'
+      );
+    });
+
+    test('Insert query columns throw for values insert', () => {
+      expect(() => new InsertQuery('MyTable', [{ id: '1' }], ['id'])).toThrow(
+        'InsertQuery queryColumns are only valid for INSERT ... SELECT'
+      );
+    });
+
+    test.each(['simple', 'english'])('Text search with tsquery', (type) => {
+      const sql = new SqlBuilder();
+      new SelectQuery('MyTable')
+        .column('id')
+        .where('name', ('TSVECTOR_' + type.toUpperCase()) as keyof typeof Operator, 'Jimmy (James) Dean')
+        .buildSql(sql);
+      expect(sql.toString()).toBe(
+        `SELECT "MyTable"."id" FROM "MyTable" WHERE to_tsvector('${type}',"MyTable"."name") @@ to_tsquery('${type}',$1)`
+      );
+      expect(sql.getValues()).toStrictEqual(['Jimmy:* & James:* & Dean:*']);
+    });
+  });
+
+  describe('ValuesQuery', () => {
+    test('one row, one value', () => {
+      const sql = new SqlBuilder();
+      new ValuesQuery('MyValues', ['firstCol'], [['firstVal']]).buildSql(sql);
+      expect(sql.toString()).toBe('SELECT * FROM (VALUES($1)) AS "MyValues"("firstCol")');
+    });
+
+    test('multiple rows, multiple values', () => {
+      const sql = new SqlBuilder();
+      new ValuesQuery(
+        'MyValues',
+        ['firstCol', 'secondCol', 'thirdCol'],
+        [
+          ['one', 'two', 3],
+          ['four', 'five', 6],
+        ]
+      ).buildSql(sql);
+      expect(sql.toString()).toBe(
+        'SELECT * FROM (VALUES($1,$2,$3),($4,$5,$6)) AS "MyValues"("firstCol","secondCol","thirdCol")'
+      );
+    });
+  });
+
+  describe('UnionAllBuilder', () => {
+    test('multiple queries', () => {
+      const unionAllBuilder = new UnionAllBuilder();
+      unionAllBuilder.add(new SelectQuery('MyTable').column('id').column('my_table_col'));
+      expect(unionAllBuilder.sql.toString()).toBe('(SELECT "MyTable"."id", "MyTable"."my_table_col" FROM "MyTable")');
+
+      unionAllBuilder.add(new SelectQuery('MyOtherTable').column('id').column('my_other_table_col'));
+      expect(unionAllBuilder.sql.toString()).toBe(
+        '(SELECT "MyTable"."id", "MyTable"."my_table_col" FROM "MyTable") UNION ALL (SELECT "MyOtherTable"."id", "MyOtherTable"."my_other_table_col" FROM "MyOtherTable")'
+      );
+
+      unionAllBuilder.add(new SelectQuery('MyThirdTable').column('id').column('my_third_table_col'));
+      expect(unionAllBuilder.sql.toString()).toBe(
+        '(SELECT "MyTable"."id", "MyTable"."my_table_col" FROM "MyTable") UNION ALL (SELECT "MyOtherTable"."id", "MyOtherTable"."my_other_table_col" FROM "MyOtherTable") UNION ALL (SELECT "MyThirdTable"."id", "MyThirdTable"."my_third_table_col" FROM "MyThirdTable")'
+      );
+    });
+  });
+
+  describe('UpdateQuery', () => {
+    test('Simple Update', () => {
+      const sql = new SqlBuilder();
+      const update = new UpdateQuery('MyTable', ['id', 'name']);
+      update.set('id', 123);
+      update.buildSql(sql);
+      expect(sql.toString()).toBe('UPDATE "MyTable" SET "id" = $1 RETURNING "MyTable"."id", "MyTable"."name"');
+      expect(sql.getValues()).toStrictEqual([123]);
+    });
+
+    test('with CTE and RETURNING', () => {
+      const cteQuery = new SelectQuery('MyTable').column('id').column('name').where('projectId', '=', null).limit(10);
+      const cte: CTE = {
+        name: 'MyCTE',
+        expr: cteQuery,
+      };
+
+      const sql = new SqlBuilder();
+      const update = new UpdateQuery('MyTable', ['id']);
+      update.from(cte);
+      update.set('id', 123);
+      update.set('name', 'new-name');
+      update.where(new Column('MyCTE', 'id'), '=', new Column('MyTable', 'id'));
+      update.buildSql(sql);
+      expect(sql.toString()).toBe(
+        'WITH "MyCTE" AS (SELECT "MyTable"."id", "MyTable"."name" FROM "MyTable" WHERE "MyTable"."projectId" IS NULL LIMIT 10) UPDATE "MyTable" SET "id" = $1, "name" = $2 FROM "MyCTE" WHERE "MyCTE"."id" = "MyTable"."id" RETURNING "MyTable"."id"'
+      );
+      expect(sql.getValues()).toStrictEqual([123, 'new-name']);
+    });
+  });
+});
+
+test('isValidTableName', () => {
+  expect(isValidTableName('Observation')).toStrictEqual(true);
+  expect(isValidTableName('Observation_History')).toStrictEqual(true);
+  expect(isValidTableName('Observation_Token_text_idx_tsv')).toStrictEqual(true);
+  expect(isValidTableName('Robert"; DROP TABLE Students;')).toStrictEqual(false);
+  expect(isValidTableName('Observation History')).toStrictEqual(false);
+});
+
+test('isValidColumnName', () => {
+  expect(isValidColumnName('id')).toStrictEqual(true);
+  expect(isValidColumnName('ID')).toStrictEqual(true);
+  expect(isValidColumnName('lastUpdated')).toStrictEqual(true);
+  expect(isValidColumnName('__version')).toStrictEqual(true);
+
+  expect(isValidColumnName('Robert"; DROP TABLE Students;')).toStrictEqual(false);
+  expect(isValidColumnName('last-updated')).toStrictEqual(false);
+  expect(isValidColumnName('')).toStrictEqual(false);
+});
+
+test('debug', async () => {
+  const writeSpy = vi.spyOn(globalLogger, 'write' as any).mockImplementation(() => undefined);
+
+  const conn = {
+    query: vi.fn(() => ({ rows: [] })),
+  } as unknown as Client;
+
+  const query = new SelectQuery('MyTable').column('id');
+
+  async function executeQuery(): Promise<void> {
+    const sql = new SqlBuilder();
+    query.buildSql(sql);
+    await sql.execute(conn);
+  }
+
+  setSqlDebug('literally anything');
+
+  writeSpy.mockClear();
+  await executeQuery();
+  expect(writeSpy).toHaveBeenCalledWith('sql SELECT "MyTable"."id" FROM "MyTable"');
+
+  setSqlDebug(undefined);
+
+  writeSpy.mockClear();
+  await executeQuery();
+  expect(writeSpy).not.toHaveBeenCalled();
+
+  resetSqlDebug();
+  writeSpy.mockRestore();
+});
+
+describe('truncateTextColumn', () => {
+  test('returns undefined for undefined', () => {
+    expect(truncateTextColumn(undefined)).toBeUndefined();
+  });
+
+  test('returns undefined for empty string', () => {
+    expect(truncateTextColumn('')).toBeUndefined();
+  });
+
+  test('returns short string unchanged', () => {
+    expect(truncateTextColumn('hello')).toBe('hello');
+  });
+
+  test('returns string at exactly MAX_INDEX_DATA_BYTES unchanged', () => {
+    const value = 'a'.repeat(MAX_INDEX_DATA_BYTES);
+    expect(truncateTextColumn(value)).toBe(value);
+  });
+
+  test('truncates ASCII string to maximum bytes, not a fixed character count', () => {
+    const value = 'a'.repeat(MAX_INDEX_DATA_BYTES + 1);
+    const result = truncateTextColumn(value) as string;
+    expect(result).toBeDefined();
+    expect(result.length).toBe(MAX_INDEX_DATA_BYTES);
+    expect(new TextEncoder().encode(result).length).toBeLessThanOrEqual(MAX_INDEX_DATA_BYTES);
+  });
+
+  test('truncates very long string', () => {
+    const value = 'a'.repeat(MAX_INDEX_DATA_BYTES * 2);
+    const result = truncateTextColumn(value) as string;
+    expect(result).toBeDefined();
+    expect(result.length).toBe(MAX_INDEX_DATA_BYTES);
+    expect(new TextEncoder().encode(result).length).toBeLessThanOrEqual(MAX_INDEX_DATA_BYTES);
+  });
+
+  test('handles multi-byte UTF-8 characters', () => {
+    const maxChars = MAX_INDEX_DATA_BYTES / 4; // 4 bytes per emoji
+    const fitting = '\u{1F600}'.repeat(maxChars);
+    expect(truncateTextColumn(fitting)).toBe(fitting);
+
+    const exceeding = '\u{1F600}'.repeat(maxChars + 1);
+    const result = truncateTextColumn(exceeding) as string;
+    expect(result).toBeDefined();
+    expect(result).toBe(fitting);
+    expect(Array.from(result).length).toBe(maxChars);
+    expect(new TextEncoder().encode(result).length).toBe(MAX_INDEX_DATA_BYTES);
+  });
+
+  test('handles mixed ASCII and multi-byte characters', () => {
+    const asciiLen = MAX_INDEX_DATA_BYTES - 4; // Leave room for one 4-byte emoji
+    const value = 'a'.repeat(asciiLen) + '\u{1F600}\u{1F600}';
+    const result = truncateTextColumn(value) as string;
+    expect(result).toBeDefined();
+    expect(new TextEncoder().encode(result).length).toBeLessThanOrEqual(MAX_INDEX_DATA_BYTES);
+    // Should keep all ASCII chars + 1 emoji (exactly MAX_INDEX_DATA_BYTES bytes)
+    expect(result).toBe('a'.repeat(asciiLen) + '\u{1F600}');
+  });
+});
+
+describe('isPoolClient', () => {
+  test('returns true for a client with a release function', () => {
+    const client = { query: vi.fn(), release: vi.fn() } as PgQueryable;
+    expect(isPoolClient(client)).toBe(true);
+  });
+
+  test('returns false for a pool without a release function', () => {
+    const pool = { query: vi.fn() } as PgQueryable;
+    expect(isPoolClient(pool)).toBe(false);
+  });
+
+  test('returns false when release is not a function', () => {
+    const notAClient = { query: vi.fn(), release: true } as PgQueryable;
+    expect(isPoolClient(notAClient)).toBe(false);
+  });
+});

@@ -1,0 +1,6 @@
+{
+  "main": "dist/cjs/index.cjs",
+  "output": "sea-prep.blob",
+  "disableExperimentalSEAWarning": true,
+  "execArgv": ["--no-warnings"]
+}

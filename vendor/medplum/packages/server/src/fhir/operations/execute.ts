@@ -1,0 +1,143 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { BotResponseStream, WithId } from '@medplum/core';
+import {
+  badRequest,
+  isOk,
+  isOperationOutcome,
+  notFound,
+  OperationOutcomeError,
+  Operator,
+  singularize,
+} from '@medplum/core';
+import type { Bot, OperationOutcome } from '@medplum/fhirtypes';
+import type { Request, Response } from 'express';
+import { executeBot } from '../../bots/execute';
+import type { BotExecutionResult } from '../../bots/types';
+import {
+  getBotDefaultHeaders,
+  getBotProjectMembership,
+  getOutParametersFromResult,
+  sendBotResponse,
+} from '../../bots/utils';
+import { getAuthenticatedContext } from '../../context';
+import { sendAsyncResponse } from './utils/asyncjobexecutor';
+
+export const DEFAULT_VM_CONTEXT_TIMEOUT = 10000;
+
+/**
+ * Handles HTTP requests for the execute operation.
+ * First reads the bot and makes sure it is valid and the user has access to it.
+ * Then executes the bot.
+ * Returns the outcome of the bot execution.
+ * Assumes that input content-type is output content-type.
+ * @param req - The request object
+ * @param res - The response object
+ */
+export const executeHandler = async (req: Request, res: Response): Promise<void> => {
+  if (req.header('Prefer') === 'respond-async') {
+    await sendAsyncResponse(req, res, async () => {
+      const result = await executeOperation(req, res);
+      if (isOperationOutcome(result) && !isOk(result)) {
+        throw new OperationOutcomeError(result);
+      }
+      return getOutParametersFromResult(result);
+    });
+  } else {
+    const result = await executeOperation(req, res);
+
+    // If a response has already started (e.g. SSE streaming), we do not control the response, clean up and return.
+    if (res.headersSent) {
+      if (!res.writableEnded) {
+        res.end();
+      }
+      return;
+    }
+
+    await sendBotResponse(req, res, result);
+  }
+};
+
+async function executeOperation(req: Request, res: Response): Promise<OperationOutcome | BotExecutionResult> {
+  const ctx = getAuthenticatedContext();
+
+  // First read the bot as the user to verify access
+  const userBot = await getBotForRequest(req);
+  if (!userBot) {
+    return badRequest('Must specify bot ID or identifier.');
+  }
+
+  // Then read the bot as system user to load extended metadata
+  const bot = await ctx.systemRepo.readResource<Bot>('Bot', userBot.id);
+
+  // Check if client accepts streaming and bot supports it
+  const acceptsStreaming = bot.streamingEnabled && req.header('Accept')?.includes('text/event-stream');
+  let responseStream: BotResponseStream | undefined = undefined;
+  if (acceptsStreaming) {
+    // Create a BotResponseStream that wraps the Express response.
+    // Bot must call startStreaming() before write() to commit headers.
+    responseStream = Object.assign(res, {
+      startStreaming: (statusCode: number, headers: Record<string, string>): void => {
+        if (!res.headersSent) {
+          res.status(statusCode);
+          for (const [key, value] of Object.entries(headers)) {
+            res.setHeader(key, value);
+          }
+          res.flushHeaders();
+        }
+      },
+    }) as BotResponseStream;
+  }
+
+  // Execute the bot
+  // If the request is HTTP POST, then the body is the input
+  // If the request is HTTP GET, then the query string is the input
+  const result = await executeBot({
+    bot,
+    runAs: await getBotProjectMembership(ctx, bot),
+    requester: ctx.membership.profile,
+    input: req.method === 'POST' ? req.body : req.query,
+    contentType: req.header('content-type') as string,
+    headers: req.headers,
+    traceId: ctx.traceId,
+    defaultHeaders: getBotDefaultHeaders(req, bot),
+    responseStream,
+  });
+
+  return result;
+}
+
+/**
+ * Returns the Bot for the execute request.
+ * If using "/Bot/:id/$execute", then the bot ID is read from the path parameter.
+ * If using "/Bot/$execute?identifier=...", then the bot is searched by identifier.
+ * Otherwise, returns undefined.
+ * @param req - The HTTP request.
+ * @returns The bot, or undefined if no ID or identifier is provided.
+ */
+async function getBotForRequest(req: Request): Promise<WithId<Bot> | undefined> {
+  const ctx = getAuthenticatedContext();
+  // Prefer to search by ID from path parameter
+  const id = singularize(req.params.id);
+  if (id) {
+    return ctx.repo.readResource<Bot>('Bot', id);
+  }
+
+  // Otherwise, search by identifier
+  const { identifier } = req.query;
+  if (identifier && typeof identifier === 'string') {
+    const bot = await ctx.repo.searchOne<Bot>({
+      resourceType: 'Bot',
+      filters: [{ code: 'identifier', operator: Operator.EXACT, value: identifier }],
+    });
+
+    if (!bot) {
+      throw new OperationOutcomeError(notFound);
+    }
+
+    return bot;
+  }
+
+  // If no bot ID or identifier, return undefined
+  return undefined;
+}

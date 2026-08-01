@@ -1,0 +1,26 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { Login } from '@medplum/fhirtypes';
+import type { Request, Response } from 'express';
+import { body } from 'express-validator';
+import { getGlobalSystemRepo } from '../fhir/repo';
+import { setLoginScope } from '../oauth/utils';
+import { makeValidationMiddleware } from '../util/validator';
+import { sendLoginResult } from './utils';
+
+/*
+ * The scope handler is used during login to allow a user to select the scope of the login.
+ * The client will submit the desired scope, and the server will update the login.
+ */
+
+export const scopeValidator = makeValidationMiddleware([
+  body('login').exists().withMessage('Missing login'),
+  body('scope').exists().withMessage('Missing scope'),
+]);
+
+export async function scopeHandler(req: Request, res: Response): Promise<void> {
+  const systemRepo = getGlobalSystemRepo();
+  const login = await systemRepo.readResource<Login>('Login', req.body.login);
+  const updated = await setLoginScope(systemRepo, login, req.body.scope);
+  await sendLoginResult(res, updated);
+}

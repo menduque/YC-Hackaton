@@ -1,0 +1,24 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import { createReference } from '@medplum/core';
+import { HomerSimpson } from '@medplum/mock';
+import type { Meta } from '@storybook/react';
+import type { JSX } from 'react';
+import { Document } from '../Document/Document';
+import { SmartAppLaunchLink } from './SmartAppLaunchLink';
+
+export default {
+  title: 'Medplum/SmartAppLaunchLink',
+  component: SmartAppLaunchLink,
+} as Meta;
+
+export const Basic = (): JSX.Element => (
+  <Document>
+    <SmartAppLaunchLink
+      client={{ resourceType: 'ClientApplication', launchUri: 'https://example.com' }}
+      patient={createReference(HomerSimpson)}
+    >
+      Example SMART Launch
+    </SmartAppLaunchLink>
+  </Document>
+);

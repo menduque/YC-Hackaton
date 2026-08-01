@@ -1,0 +1,164 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { BackgroundJobInteraction } from '@medplum/core';
+import { ContentType } from '@medplum/core';
+import type { Resource, Subscription } from '@medplum/fhirtypes';
+import type { Job, Queue } from 'bullmq';
+import { UnrecoverableError } from 'bullmq';
+import type { Mock } from 'vitest';
+import { vi } from 'vitest';
+import { execDispatchJob, getDispatchQueue } from './dispatch';
+import { execDownloadJob, getDownloadQueue } from './download';
+import { execSubscriptionJob, getSubscriptionQueue } from './subscription';
+
+/**
+ * Finds the dispatch job for the given resource and interaction, and executes it.
+ * This emulates what BullMQ would do when processing the job, and allows us to test the effects of the job in our unit tests.
+ *
+ * @param resource - The resource that was created or updated.
+ * @param interaction - The interaction that triggered the job (e.g. 'create', 'update', etc.).
+ */
+export async function findAndExecDispatchJob(resource: Resource, interaction: BackgroundJobInteraction): Promise<void> {
+  await findAndExecJob(
+    getDispatchQueue,
+    execDispatchJob,
+    (jobData) =>
+      jobData.interaction === interaction &&
+      jobData.resourceType === resource.resourceType &&
+      jobData.id === resource.id,
+    `dispatch job for ${resource.resourceType}/${resource.id} ${interaction}`
+  );
+}
+
+/**
+ * Finds the subscription job for the given resource and interaction, and executes it.
+ * Also executes the dispatch job, since the subscription job is added by the dispatch job.
+ * This emulates what BullMQ would do when processing the job, and allows us to test the effects of the job in our unit tests.
+ *
+ * @param resource - The resource that was created or updated.
+ * @param interaction - The interaction that triggered the job (e.g. 'create', 'update', etc.).
+ * @param subscription - Optional subscription to match. If not provided, will match any subscription job for the resource and interaction.
+ * @returns The list of subscription jobs that were executed (there may be more than one if the job was retried).
+ */
+export async function findAndExecSubscriptionJob(
+  resource: Resource,
+  interaction: BackgroundJobInteraction,
+  subscription?: Subscription
+): Promise<Job[]> {
+  await findAndExecDispatchJob(resource, interaction);
+  return findAndExecJob(
+    getSubscriptionQueue,
+    execSubscriptionJob,
+    (jobData) =>
+      jobData.interaction === interaction &&
+      jobData.resourceType === resource.resourceType &&
+      jobData.id === resource.id &&
+      (!subscription || jobData.subscriptionId === subscription.id),
+    `subscription job for ${resource.resourceType}/${resource.id} ${interaction}` +
+      (subscription ? ` matching Subscription/${subscription.id}` : '')
+  );
+}
+
+/**
+ * Finds the download job for the given resource and interaction, and executes it.
+ *
+ * @param resource - The resource that was created or updated.
+ * @param interaction - The interaction that triggered the job (e.g. 'create', 'update', etc.).
+ * @param url - Optional URL to match. If not provided, will match any download job for the resource and interaction.
+ * @returns The list of download jobs that were executed (there may be more than one if the job was retried).
+ */
+export async function findAndExecDownloadJob(
+  resource: Resource,
+  interaction: BackgroundJobInteraction,
+  url?: string
+): Promise<Job[]> {
+  await findAndExecDispatchJob(resource, interaction);
+  return findAndExecJob(
+    getDownloadQueue,
+    execDownloadJob,
+    (jobData) =>
+      jobData.resourceType === resource.resourceType && jobData.id === resource.id && (!url || jobData.url === url),
+    `download job for ${resource.resourceType}/${resource.id} ${interaction}` + (url ? ` matching ${url}` : '')
+  );
+}
+
+/**
+ * Finds the job in the given queue that matches the provided criteria, and executes it.
+ *
+ * @param getQueue - A function that returns the queue to search for the job. This is necessary because the queue may not be initialized at the time this function is called.
+ * @param execJob - A function that executes the job. This is necessary because the job processing logic is defined in the worker, and we want to reuse that logic in our tests.
+ * @param matchJob - A function that matches the job data to find the correct job to execute. This is necessary because there may be multiple jobs in the queue, and we want to find the one that matches our criteria.
+ * @param description - Human-readable description of what was being looked for, used in the "Job not found" error.
+ * @returns The list of jobs that were executed (there may be more than one if the job was retried).
+ */
+async function findAndExecJob(
+  getQueue: () => Queue | undefined,
+  execJob: (job: Job) => Promise<void>,
+  matchJob: (jobData: any) => boolean,
+  description: string
+): Promise<Job[]> {
+  const queue = getQueue();
+  if (!queue) {
+    throw new Error('Queue not initialized');
+  }
+
+  const enqueued = (queue.add as Mock).mock.calls.map(([_jobName, data]) => data);
+  const jobData = enqueued.find((data) => matchJob(data));
+  if (!jobData) {
+    // Say what was being looked for and what was enqueued instead. A bare "Job not found" cannot
+    // distinguish "the subscription was never matched" from "the dispatch job swallowed an error and
+    // enqueued nothing at all", which is the difference between a real bug and a flake.
+    //
+    // Note that `execDispatchJob` catches and only logs errors from `addSubscriptionJobs` /
+    // `addDownloadJobs` / `addCronJobs`, so when nothing was enqueued at all, check the logs for
+    // "Error adding <x> jobs" -- the real cause is there, not here.
+    //
+    // The mock accumulates for the lifetime of the queue, so only the most recent jobs are relevant.
+    throw new Error(
+      `Job not found: no ${description}. ` +
+        `${enqueued.length} job(s) enqueued on this queue, most recent last: ${JSON.stringify(enqueued.slice(-10))}`
+    );
+  }
+
+  const result: Job[] = [];
+  const maxRetries = 3;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const job = {
+      id: 1 + attempt,
+      data: jobData,
+      attemptsMade: attempt,
+      changePriority: vi.fn(),
+    } as unknown as Job;
+    result.push(job);
+    try {
+      await execJob(job);
+      break; // Exit loop if successful
+    } catch (err) {
+      if (attempt === maxRetries - 1 || err instanceof UnrecoverableError) {
+        throw err;
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Returns a mock Response object with the given status, body, and headers. This is useful for testing fetch calls in our workers.
+ *
+ * @param status - The HTTP status code to return in the response.
+ * @param body - The body of the response. This can be a string, a Blob, or any other type that can be returned by fetch.
+ * @param headers - Optional headers to include in the response. This can be used to override the default headers that are included in the response (e.g. content-disposition, content-type, etc.).
+ * @returns The mock Response object with the given status, body, and headers.
+ */
+export function mockFetchResponse(status: number, body: any, headers: Record<string, string> = {}): Response {
+  return new Response(body, {
+    status,
+    headers: {
+      'content-disposition': 'attachment; filename=download-1',
+      'content-type': ContentType.TEXT,
+      ...headers,
+    },
+  });
+}

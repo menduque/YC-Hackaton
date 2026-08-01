@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "module": "preserve",
+    "types": ["node", "vitest/globals"],
+    "lib": ["esnext", "dom"]
+  },
+  "references": [
+    { "path": "../core" },
+    { "path": "../definitions" },
+    { "path": "../fhirtypes" },
+    { "path": "../hl7" },
+    { "path": "../mock" }
+  ],
+  "include": ["src/**/*.ts"]
+}

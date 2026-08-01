@@ -1,0 +1,17 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { Meta } from '@storybook/react';
+import type { JSX } from 'react';
+import { Document } from '../Document/Document';
+import { AttachmentDisplay } from './AttachmentDisplay';
+
+export default {
+  title: 'Medplum/AttachmentDisplay',
+  component: AttachmentDisplay,
+} as Meta;
+
+export const Basic = (): JSX.Element => (
+  <Document>
+    <AttachmentDisplay value={{ url: 'http://example.com/file1', title: 'file1.txt' }} />
+  </Document>
+);

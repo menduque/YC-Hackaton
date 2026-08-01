@@ -1,0 +1,1115 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { MedplumInfraConfig } from '@medplum/core';
+import { EMPTY } from '@medplum/core';
+import {
+  Duration,
+  RemovalPolicy,
+  aws_ec2 as ec2,
+  aws_ecs as ecs,
+  aws_elasticache as elasticache,
+  aws_elasticloadbalancingv2 as elbv2,
+  aws_iam as iam,
+  aws_logs as logs,
+  aws_rds as rds,
+  aws_route53 as route53,
+  aws_s3 as s3,
+  aws_secretsmanager as secretsmanager,
+  aws_ssm as ssm,
+  aws_route53_targets as targets,
+  aws_wafv2 as wafv2,
+} from 'aws-cdk-lib';
+import { Repository } from 'aws-cdk-lib/aws-ecr';
+import { ClusterInstance, DBClusterStorageType, ParameterGroup } from 'aws-cdk-lib/aws-rds';
+import { Secret, SecretTargetAttachment } from 'aws-cdk-lib/aws-secretsmanager';
+import { Construct } from 'constructs';
+import assert from 'node:assert';
+import { buildWaf } from './waf';
+
+/**
+ * Based on: https://github.com/aws-samples/http-api-aws-fargate-cdk/blob/master/cdk/singleAccount/lib/fargate-vpclink-stack.ts
+ *
+ * RDS config: https://docs.aws.amazon.com/cdk/api/latest/docs/aws-rds-readme.html
+ */
+export class BackEnd extends Construct {
+  vpc: ec2.IVpc;
+  botLambdaRole: iam.IRole;
+  rdsSecretsArn?: string;
+  rdsCluster?: rds.DatabaseCluster;
+  rdsProxy?: rds.DatabaseProxy;
+  redisSubnetGroup: elasticache.CfnSubnetGroup;
+  redisSecurityGroup: ec2.ISecurityGroup;
+  redisPassword: secretsmanager.ISecret;
+  redisCluster: elasticache.CfnReplicationGroup;
+  redisSecrets: secretsmanager.ISecret;
+  ecsCluster: ecs.Cluster;
+  taskRolePolicies: iam.PolicyDocument;
+  taskRole: iam.Role;
+  taskDefinition: ecs.FargateTaskDefinition;
+  logGroup?: logs.ILogGroup;
+  logDriver: ecs.LogDriver;
+  loggingBucket?: s3.IBucket;
+  loadBalancerSecurityGroup?: ec2.ISecurityGroup;
+  serviceContainer: ecs.ContainerDefinition;
+  fargateSecurityGroup: ec2.SecurityGroup;
+  fargateService: ecs.FargateService;
+  loadBalancer: elbv2.ApplicationLoadBalancer;
+  mtlsLoadBalancer?: elbv2.ApplicationLoadBalancer;
+  dnsRecord?: route53.ARecord;
+  mtlsDnsRecord?: route53.ARecord;
+  regionParameter: ssm.StringParameter;
+  databaseSecretsParameter: ssm.StringParameter;
+  databaseProxyEndpointParameter?: ssm.StringParameter;
+  redisSecretsParameter: ssm.StringParameter;
+  botLambdaRoleParameter: ssm.StringParameter;
+  workersParameter?: ssm.StringParameter;
+  rdsClusterParameterGroup?: rds.ParameterGroup;
+  rdsWriterParameterGroup?: rds.ParameterGroup;
+  rdsReaderParameterGroup?: rds.ParameterGroup;
+
+  constructor(scope: Construct, config: MedplumInfraConfig) {
+    super(scope, 'BackEnd');
+
+    const name = config.name;
+    const accountNumber = config.accountNumber;
+    const region = config.region;
+
+    // VPC
+    if (config.vpcId) {
+      // Lookup VPC by ARN
+      this.vpc = ec2.Vpc.fromLookup(this, 'VPC', { vpcId: config.vpcId });
+    } else {
+      // VPC Flow Logs
+      const vpcFlowLogs = new logs.LogGroup(this, 'VpcFlowLogs', {
+        logGroupName: '/medplum/flowlogs/' + name,
+        removalPolicy: RemovalPolicy.DESTROY,
+      });
+
+      // Create VPC
+      this.vpc = new ec2.Vpc(this, 'VPC', {
+        maxAzs: config.maxAzs,
+        flowLogs: {
+          cloudwatch: {
+            destination: ec2.FlowLogDestination.toCloudWatchLogs(vpcFlowLogs),
+            trafficType: ec2.FlowLogTrafficType.ALL,
+          },
+        },
+      });
+    }
+
+    // Bot Lambda Role
+    this.botLambdaRole = new iam.Role(this, 'BotLambdaRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+    });
+
+    // RDS
+    this.rdsSecretsArn = config.rdsSecretsArn;
+    if (!this.rdsSecretsArn || config.rdsForceRetain) {
+      const { engine, majorVersion } = getPostgresEngine(
+        config.rdsInstanceVersion,
+        rds.AuroraPostgresEngineVersion.VER_16_9
+      );
+
+      const clusterParameters: NonNullable<rds.ParameterGroupProps['parameters']> = {
+        statement_timeout: '60000',
+        default_transaction_isolation: 'REPEATABLE READ',
+        ...config.rdsClusterParameters,
+      };
+
+      if (config.rdsPersistentParameterGroups) {
+        // bindToCluster and bindToInstance to force parameter group existence even when not actively used by a cluster
+
+        const idPrefix = `MedplumPG${majorVersion}`;
+        this.rdsClusterParameterGroup = new ParameterGroup(this, `${idPrefix}ClusterParameterGroup`, {
+          engine,
+          parameters: clusterParameters,
+          removalPolicy: RemovalPolicy.RETAIN,
+        });
+        this.rdsClusterParameterGroup.bindToCluster({});
+
+        this.rdsWriterParameterGroup = new ParameterGroup(this, `${idPrefix}WriterInstanceParameterGroup`, {
+          engine,
+          removalPolicy: RemovalPolicy.RETAIN,
+        });
+        this.rdsWriterParameterGroup.bindToInstance({});
+
+        this.rdsReaderParameterGroup = new ParameterGroup(this, `${idPrefix}ReaderInstanceParameterGroup`, {
+          engine,
+          removalPolicy: RemovalPolicy.RETAIN,
+        });
+        this.rdsReaderParameterGroup.bindToInstance({});
+      }
+
+      if (config.rdsIdsMajorVersionSuffix) {
+        if (
+          !config.rdsPersistentParameterGroups ||
+          !this.rdsClusterParameterGroup ||
+          !this.rdsWriterParameterGroup ||
+          !this.rdsReaderParameterGroup
+        ) {
+          throw new Error('rdsPersistentParameterGroups must be true when rdsIdsMajorVersionSuffix is true');
+        }
+
+        this.rdsClusterParameterGroup satisfies rds.ParameterGroup;
+        this.rdsWriterParameterGroup satisfies rds.ParameterGroup;
+        this.rdsReaderParameterGroup satisfies rds.ParameterGroup;
+      }
+
+      // See: https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_rds-readme.html#migrating-from-instanceprops
+      const defaultInstanceProps: rds.ProvisionedClusterInstanceProps = {
+        enablePerformanceInsights: true,
+        isFromLegacyInstanceProps: true,
+        caCertificate: rds.CaCertificate.RDS_CA_RSA2048_G1,
+      };
+
+      const legacyClusterParams = new ParameterGroup(this, 'MedplumDatabaseClusterParams', {
+        engine,
+        parameters: clusterParameters,
+      });
+
+      const readerInstanceType = config.rdsReaderInstanceType ?? config.rdsInstanceType;
+      const readerInstanceProps: rds.ProvisionedClusterInstanceProps = {
+        ...defaultInstanceProps,
+        instanceType: readerInstanceType ? new ec2.InstanceType(readerInstanceType) : undefined,
+        parameterGroup: config.rdsIdsMajorVersionSuffix ? this.rdsReaderParameterGroup : undefined,
+      };
+
+      const writerInstanceType = config.rdsInstanceType;
+      const writerInstanceProps: rds.ProvisionedClusterInstanceProps = {
+        ...defaultInstanceProps,
+        instanceType: writerInstanceType ? new ec2.InstanceType(writerInstanceType) : undefined,
+        parameterGroup: config.rdsIdsMajorVersionSuffix ? this.rdsWriterParameterGroup : undefined,
+      };
+
+      let readers: rds.IClusterInstance[] | undefined;
+      if (config.rdsInstances > 1) {
+        readers = [];
+        for (let i = 1; i < config.rdsInstances; i++) {
+          readers.push(ClusterInstance.provisioned('Instance' + (i + 1), readerInstanceProps));
+        }
+      }
+
+      const credentials = rds.Credentials.fromGeneratedSecret('clusteradmin');
+
+      const defaultClusterProps: Partial<rds.DatabaseClusterProps> = {
+        credentials,
+        defaultDatabaseName: 'medplum',
+        storageEncrypted: true,
+        // Instances with attached NVMe SSD (db.*d* instance classes) should utilize I/O optimized storage
+        // to unlock additional performance improvements (e.g. tiered caching between memory and SSD)
+        storageType: writerInstanceType?.match(/^\w+d\w*\./i)
+          ? DBClusterStorageType.AURORA_IOPT1
+          : DBClusterStorageType.AURORA,
+        vpc: this.vpc,
+        vpcSubnets: {
+          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+        },
+        backup: {
+          retention: Duration.days(7),
+        },
+        cloudwatchLogsExports: ['postgresql'],
+        instanceUpdateBehaviour: rds.InstanceUpdateBehaviour.ROLLING,
+        removalPolicy: RemovalPolicy.RETAIN,
+        autoMinorVersionUpgrade: config.rdsAutoMinorVersionUpgrade,
+      };
+
+      const rdsClusterId = getDatabaseClusterId(config.rdsIdsMajorVersionSuffix ? majorVersion : undefined);
+      this.rdsCluster = new rds.DatabaseCluster(this, rdsClusterId, {
+        ...defaultClusterProps,
+        engine,
+        writer: ClusterInstance.provisioned('Instance1', writerInstanceProps),
+        readers,
+        parameterGroup: this.rdsClusterParameterGroup ?? legacyClusterParams,
+      });
+
+      const secretAttachment = this.rdsCluster.secret;
+      assert(secretAttachment !== undefined, 'rdsCluster.secret is undefined');
+
+      secretAttachment.applyRemovalPolicy(RemovalPolicy.RETAIN);
+
+      // rdsCluster.secret is actually a SecretAttachment; not the secret itself
+      assert(secretAttachment instanceof SecretTargetAttachment, 'rdsCluster.secret is not a SecretTargetAttachment');
+
+      // there is no direct way to get from SecretTargetAttachment to Secret, so break glass by going through node.scope
+      const secret = secretAttachment.node.scope;
+      assert(secret instanceof Secret, 'rdsCluster.secretAttachment.node.scope is not a Secret');
+      secret.applyRemovalPolicy(RemovalPolicy.RETAIN);
+
+      if (!this.rdsSecretsArn) {
+        this.rdsSecretsArn = secretAttachment.secretArn;
+      }
+
+      if (config.rdsProxyEnabled) {
+        this.rdsProxy = new rds.DatabaseProxy(this, 'DatabaseProxy', {
+          proxyTarget: rds.ProxyTarget.fromCluster(this.rdsCluster),
+          secrets: [secretAttachment],
+          vpc: this.vpc,
+        });
+      }
+    }
+
+    // Redis
+    // Important: For HIPAA compliance, you must specify TransitEncryptionEnabled as true, an AuthToken, and a CacheSubnetGroup.
+    this.redisSubnetGroup = new elasticache.CfnSubnetGroup(this, 'RedisSubnetGroup', {
+      description: 'Redis Subnet Group',
+      subnetIds: this.vpc.privateSubnets.map((subnet) => subnet.subnetId),
+    });
+
+    const defaultRedis = this.createRedisCluster('Redis', {
+      nodeType: config.cacheNodeType,
+      securityGroupId: config.cacheSecurityGroupId,
+      engine: config.cacheEngine,
+      engineVersion: config.cacheEngineVersion,
+    });
+    this.redisSecurityGroup = defaultRedis.securityGroup;
+    this.redisPassword = defaultRedis.password;
+    this.redisCluster = defaultRedis.cluster;
+    this.redisSecrets = defaultRedis.secrets;
+
+    // Purpose-specific Redis clusters
+    const purposeRedisConfigs = [
+      { key: 'cacheRedis' as const, id: 'CacheRedis' },
+      { key: 'rateLimitRedis' as const, id: 'RateLimitRedis' },
+      { key: 'pubSubRedis' as const, id: 'PubSubRedis' },
+      { key: 'backgroundJobsRedis' as const, id: 'BackgroundJobsRedis' },
+    ];
+
+    const purposeRedisClusters: {
+      id: string;
+      securityGroup: ec2.ISecurityGroup;
+      cluster: elasticache.CfnReplicationGroup;
+      secrets: secretsmanager.ISecret;
+      secretsParameter?: ssm.StringParameter;
+    }[] = [];
+    for (const { key, id } of purposeRedisConfigs) {
+      const redisConfig = config[key];
+      if (redisConfig) {
+        const redis = this.createRedisCluster(id, {
+          nodeType: redisConfig.nodeType,
+          securityGroupId: redisConfig.securityGroupId,
+          engine: redisConfig.engine,
+          engineVersion: redisConfig.engineVersion,
+        });
+        purposeRedisClusters.push({ id, ...redis });
+      }
+    }
+
+    // ECS Cluster
+    let clusterProps: ecs.ClusterProps = { vpc: this.vpc };
+    if (config.containerInsightsV2) {
+      clusterProps = { ...clusterProps, containerInsightsV2: config.containerInsightsV2 as ecs.ContainerInsights };
+    }
+    this.ecsCluster = new ecs.Cluster(this, 'Cluster', clusterProps);
+
+    // Task Policies
+    this.taskRolePolicies = new iam.PolicyDocument({
+      statements: [
+        // CloudWatch Logs: Create streams and put events
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            'logs:PutLogEvents',
+            'logs:CreateLogGroup',
+            'logs:CreateLogStream',
+            'logs:DescribeLogStreams',
+            'logs:DescribeLogGroups',
+            'logs:PutRetentionPolicy',
+          ],
+          resources: [`arn:aws:logs:${region}:${accountNumber}:log-group:*`],
+        }),
+
+        // Secrets Manager: Read only access to secrets
+        // https://docs.aws.amazon.com/mediaconnect/latest/ug/iam-policy-examples-asm-secrets.html
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            'secretsmanager:GetResourcePolicy',
+            'secretsmanager:GetSecretValue',
+            'secretsmanager:DescribeSecret',
+            'secretsmanager:ListSecrets',
+            'secretsmanager:ListSecretVersionIds',
+          ],
+          resources: [`arn:aws:secretsmanager:${region}:${accountNumber}:secret:*`],
+        }),
+
+        // Parameter Store: Read only access
+        // https://docs.aws.amazon.com/systems-manager/latest/userguide/sysman-paramstore-access.html
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ['ssm:GetParametersByPath', 'ssm:GetParameters', 'ssm:GetParameter', 'ssm:DescribeParameters'],
+          resources: [`arn:aws:ssm:${region}:${accountNumber}:parameter/medplum/${name}/*`],
+        }),
+
+        // SES: Send emails
+        // https://docs.aws.amazon.com/ses/latest/dg/sending-authorization-policy-examples.html
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ['ses:SendEmail', 'ses:SendRawEmail'],
+          resources: [`arn:aws:ses:${region}:${accountNumber}:identity/*`],
+        }),
+
+        // S3: List storage bucket
+        // https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ['s3:ListBucket'],
+          resources: [`arn:aws:s3:::${config.storageBucketName}`],
+        }),
+
+        // S3: Read, write, and delete access to storage bucket
+        // https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+          resources: [`arn:aws:s3:::${config.storageBucketName}/*`],
+        }),
+
+        // S3 Tables: Read table bucket config and write table data
+        // https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3tables.html
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            's3tables:CreateNamespace',
+            's3tables:CreateTable',
+            's3tables:GetNamespace',
+            's3tables:GetTable',
+            's3tables:GetTableBucket',
+            's3tables:GetTableData',
+            's3tables:GetTableEncryption',
+            's3tables:GetTableMetadataLocation',
+            's3tables:ListNamespaces',
+            's3tables:ListTables',
+            's3tables:PutTableData',
+            's3tables:UpdateTableMetadataLocation',
+          ],
+          resources: [
+            `arn:aws:s3tables:${region}:${accountNumber}:bucket/*`,
+            `arn:aws:s3tables:${region}:${accountNumber}:bucket/*/table/*`,
+          ],
+        }),
+
+        // IAM: Pass role to innvoke lambda functions
+        // https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_passrole.html
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ['iam:ListRoles', 'iam:GetRole', 'iam:PassRole'],
+          resources: [this.botLambdaRole.roleArn],
+        }),
+
+        // Lambda: Create, read, update, delete, and invoke functions
+        // https://docs.aws.amazon.com/lambda/latest/dg/access-control-identity-based.html
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            'lambda:CreateFunction',
+            'lambda:GetFunction',
+            'lambda:GetFunctionConfiguration',
+            'lambda:UpdateFunctionCode',
+            'lambda:UpdateFunctionConfiguration',
+            'lambda:InvokeFunction',
+            'lambda:ListVersionsByFunction',
+            'lambda:DeleteFunction',
+          ],
+          resources: [`arn:aws:lambda:${region}:${accountNumber}:function:medplum-bot-lambda-*`],
+        }),
+
+        // Lambda: List functions
+        // https://docs.aws.amazon.com/lambda/latest/dg/permissions-user-function.html
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ['lambda:ListFunctions'],
+          resources: ['*'],
+        }),
+
+        // Lambda layers: List layer versions
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ['lambda:ListLayerVersions'],
+          resources: [`arn:aws:lambda:${region}:${accountNumber}:layer:medplum-bot-layer`],
+        }),
+
+        // Lambda layers: Get layer version
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ['lambda:GetLayerVersion'],
+          resources: [`arn:aws:lambda:${region}:${accountNumber}:layer:medplum-bot-layer:*`],
+        }),
+
+        // XRay: Write to segment store
+        // https://docs.aws.amazon.com/xray/latest/devguide/xray-api-permissions-ref.html
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            'xray:PutTraceSegments',
+            'xray:PutTelemetryRecords',
+            'xray:GetSamplingRules',
+            'xray:GetSamplingTargets',
+            'xray:GetSamplingStatisticSummaries',
+          ],
+          resources: ['*'],
+        }),
+
+        // Textract and Comprehend Medical: Analyze medical text
+        // https://docs.aws.amazon.com/comprehend/latest/dg/security_iam_id-based-policy-examples.html
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            'comprehend:DetectEntities',
+            'comprehend:DetectKeyPhrases',
+            'comprehend:DetectDominantLanguage',
+            'comprehend:DetectSentiment',
+            'comprehend:DetectTargetedSentiment',
+            'comprehend:DetectSyntax',
+            'comprehendmedical:DetectEntitiesV2',
+            'textract:DetectDocumentText',
+            'textract:AnalyzeDocument',
+            'textract:StartDocumentTextDetection',
+            'textract:GetDocumentTextDetection',
+          ],
+          resources: ['*'],
+        }),
+      ],
+    });
+
+    // Task Role
+    this.taskRole = new iam.Role(this, 'TaskExecutionRole', {
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+      description: 'Medplum Server Task Execution Role',
+      inlinePolicies: {
+        TaskExecutionPolicies: this.taskRolePolicies,
+      },
+    });
+
+    // Task Definitions
+    this.taskDefinition = new ecs.FargateTaskDefinition(this, 'TaskDefinition', {
+      memoryLimitMiB: config.serverMemory,
+      cpu: config.serverCpu,
+      taskRole: this.taskRole,
+    });
+
+    // Log Drivers
+    if (config.fireLens?.enabled) {
+      this.logDriver = new ecs.FireLensLogDriver({
+        options: {
+          ...config.fireLens.logDriverConfig?.options,
+        },
+      });
+    } else {
+      this.logGroup = new logs.LogGroup(this, 'LogGroup', {
+        logGroupName: '/ecs/medplum/' + name,
+        removalPolicy: RemovalPolicy.DESTROY,
+      });
+
+      this.logDriver = new ecs.AwsLogDriver({
+        logGroup: this.logGroup,
+        streamPrefix: 'Medplum',
+      });
+    }
+
+    let containerRegistryCredentials: secretsmanager.ISecret | undefined = undefined;
+    if (config.containerRegistryCredentialsSecretArn) {
+      containerRegistryCredentials = secretsmanager.Secret.fromSecretCompleteArn(
+        this,
+        'RegistryCredentialsSecret',
+        config.containerRegistryCredentialsSecretArn
+      );
+    }
+
+    // Task Containers
+    this.serviceContainer = this.taskDefinition.addContainer('MedplumTaskDefinition', {
+      image: this.getContainerImage(config, config.serverImage, containerRegistryCredentials, 'Server'),
+      command: [region === 'us-east-1' ? `aws:/medplum/${name}/` : `aws:${region}:/medplum/${name}/`],
+      logging: this.logDriver,
+      environment: config.environment,
+    });
+
+    this.serviceContainer.addPortMappings({
+      containerPort: config.apiPort,
+      hostPort: config.apiPort,
+    });
+
+    this.addSidecarContainers(this.taskDefinition, config, config.additionalContainers, containerRegistryCredentials);
+
+    // Security Groups
+    this.fargateSecurityGroup = new ec2.SecurityGroup(this, 'ServiceSecurityGroup', {
+      allowAllOutbound: true,
+      securityGroupName: 'MedplumSecurityGroup',
+      vpc: this.vpc,
+    });
+
+    // Fargate Services
+    this.fargateService = new ecs.FargateService(this, 'FargateService', {
+      cluster: this.ecsCluster,
+      taskDefinition: this.taskDefinition,
+      assignPublicIp: false,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      },
+      desiredCount: config.desiredServerCount,
+      securityGroups: [this.fargateSecurityGroup],
+      healthCheckGracePeriod: Duration.minutes(5),
+      minHealthyPercent: 100, // 50% is the default
+    });
+
+    // Add autoscaling
+    this.addAutoScaling(this.fargateService, config.fargateAutoScaling);
+
+    // Add dependencies - make sure Fargate service is created after RDS and Redis
+    this.addServiceDependencies(this.fargateService, purposeRedisClusters);
+
+    // Load Balancer logging
+    if (config.loadBalancerLoggingBucket) {
+      this.loggingBucket = s3.Bucket.fromBucketName(this, 'LoggingBucket', config.loadBalancerLoggingBucket);
+    }
+
+    if (config.loadBalancerSecurityGroupId) {
+      this.loadBalancerSecurityGroup = ec2.SecurityGroup.fromSecurityGroupId(
+        this,
+        'LoadBalancerSecurityGroup',
+        config.loadBalancerSecurityGroupId
+      );
+    }
+
+    // Load Balancer
+    const loadBalancingAlgorithm = resolveLoadBalancingAlgorithmType(config.loadBalancerAlgorithm);
+
+    this.loadBalancer = this.createLoadBalancer(
+      config.stackName,
+      '',
+      config.apiPort,
+      config.apiInternetFacing !== false,
+      config.apiSslCertArn,
+      config.loadBalancerLoggingPrefix,
+      config.apiWafIpSetArn,
+      config.wafLogGroupName,
+      config.wafLogGroupCreate,
+      undefined,
+      loadBalancingAlgorithm
+    );
+
+    // Optional mTLS Load Balancer
+    if (config.mtlsSslCertArn) {
+      this.mtlsLoadBalancer = this.createLoadBalancer(
+        config.stackName,
+        'Mtls',
+        config.apiPort,
+        config.mtlsInternetFacing !== false,
+        config.mtlsSslCertArn,
+        config.loadBalancerLoggingPrefix,
+        config.mtlsWafIpSetArn,
+        config.wafLogGroupName,
+        config.wafLogGroupCreate,
+        { mutualAuthenticationMode: elbv2.MutualAuthenticationMode.PASS_THROUGH },
+        loadBalancingAlgorithm
+      );
+    }
+
+    if (this.rdsCluster) {
+      // Grant RDS access to the fargate group
+      this.rdsCluster.connections.allowDefaultPortFrom(this.fargateSecurityGroup);
+
+      // Retain RDS cluster security groups and their rules
+      this.rdsCluster.connections.securityGroups.forEach((sg) => {
+        sg.applyRemovalPolicy(RemovalPolicy.RETAIN);
+        sg.node.children.forEach((child) => {
+          if (child instanceof ec2.CfnSecurityGroupIngress || child instanceof ec2.CfnSecurityGroupEgress) {
+            child.applyRemovalPolicy(RemovalPolicy.RETAIN);
+          }
+        });
+      });
+    }
+
+    // Grant RDS Proxy access to the fargate group
+    if (this.rdsProxy) {
+      // Cannot call allowDefaultPortFrom(): this resource has no default port
+      // See: https://repost.aws/knowledge-center/rds-proxy-connection-issues
+      this.rdsProxy.connections.allowFrom(this.fargateSecurityGroup, ec2.Port.tcp(5432));
+    }
+
+    // Grant Redis access to the fargate group
+    this.redisSecurityGroup.addIngressRule(this.fargateSecurityGroup, ec2.Port.tcp(6379));
+
+    // Grant purpose-specific Redis access to the fargate group and create SSM parameters
+    for (const purposeRedis of purposeRedisClusters) {
+      purposeRedis.securityGroup.addIngressRule(this.fargateSecurityGroup, ec2.Port.tcp(6379));
+      purposeRedis.secretsParameter = new ssm.StringParameter(this, `${purposeRedis.id}SecretsParameter`, {
+        tier: ssm.ParameterTier.STANDARD,
+        parameterName: `/medplum/${name}/${purposeRedis.id}Secrets`,
+        description: `${purposeRedis.id} secrets ARN`,
+        stringValue: purposeRedis.secrets.secretArn,
+      });
+    }
+
+    // Additional Services (e.g., background workers)
+    for (const service of config.workerServices ?? []) {
+      this.createWorkerService(config, service, containerRegistryCredentials, purposeRedisClusters);
+    }
+
+    // DNS
+    if (!config.skipDns) {
+      // Route 53
+      const hostedZoneName = config.hostedZoneName ?? config.domainName.split('.').slice(-2).join('.');
+      const zone = route53.HostedZone.fromLookup(this, 'Zone', { domainName: hostedZoneName });
+
+      // Route53 alias record for the load balancer
+      this.dnsRecord = new route53.ARecord(this, 'LoadBalancerAliasRecord', {
+        recordName: config.apiDomainName,
+        target: route53.RecordTarget.fromAlias(new targets.LoadBalancerTarget(this.loadBalancer)),
+        zone: zone,
+      });
+
+      if (this.mtlsLoadBalancer) {
+        this.mtlsDnsRecord = new route53.ARecord(this, 'MtlsLoadBalancerAliasRecord', {
+          recordName: config.mtlsDomainName,
+          target: route53.RecordTarget.fromAlias(new targets.LoadBalancerTarget(this.mtlsLoadBalancer)),
+          zone: zone,
+        });
+      }
+    }
+
+    // SSM Parameters
+    this.regionParameter = new ssm.StringParameter(this, 'RegionParameter', {
+      tier: ssm.ParameterTier.STANDARD,
+      parameterName: `/medplum/${name}/awsRegion`,
+      description: 'AWS region',
+      stringValue: config.region,
+    });
+
+    this.databaseSecretsParameter = new ssm.StringParameter(this, 'DatabaseSecretsParameter', {
+      tier: ssm.ParameterTier.STANDARD,
+      parameterName: `/medplum/${name}/DatabaseSecrets`,
+      description: 'Database secrets ARN',
+      stringValue: this.rdsSecretsArn,
+    });
+
+    if (this.rdsProxy) {
+      this.databaseProxyEndpointParameter = new ssm.StringParameter(this, 'DatabaseProxyEndpointParameter', {
+        tier: ssm.ParameterTier.STANDARD,
+        parameterName: `/medplum/${name}/databaseProxyEndpoint`,
+        description: 'Database proxy endpoint',
+        stringValue: this.rdsProxy?.endpoint,
+      });
+    }
+
+    this.redisSecretsParameter = new ssm.StringParameter(this, 'RedisSecretsParameter', {
+      tier: ssm.ParameterTier.STANDARD,
+      parameterName: `/medplum/${name}/RedisSecrets`,
+      description: 'Redis secrets ARN',
+      stringValue: this.redisSecrets.secretArn,
+    });
+
+    this.botLambdaRoleParameter = new ssm.StringParameter(this, 'BotLambdaRoleParameter', {
+      tier: ssm.ParameterTier.STANDARD,
+      parameterName: `/medplum/${name}/botLambdaRoleArn`,
+      description: 'Bot lambda execution role ARN',
+      stringValue: this.botLambdaRole.roleArn,
+    });
+
+    // Workers configuration
+    if (config.workers) {
+      this.workersParameter = new ssm.StringParameter(this, 'WorkersParameter', {
+        tier: ssm.ParameterTier.STANDARD,
+        parameterName: `/medplum/${name}/workers`,
+        description: 'Background workers configuration',
+        stringValue: JSON.stringify(config.workers),
+      });
+    }
+  }
+
+  /**
+   * Returns a container image for the given image name.
+   * If the image name is an ECR image, then the image will be pulled from ECR.
+   * Otherwise, the image name is assumed to be a Docker Hub image.
+   * @param config - The config settings (account number and region).
+   * @param imageName - The image name.
+   * @param credentials - The credentials for the image repository.
+   * @param constructIdPrefix - Prefix for the construct ID to avoid collisions (default: 'Server').
+   * @returns The container image.
+   */
+  private getContainerImage(
+    config: MedplumInfraConfig,
+    imageName: string,
+    credentials: secretsmanager.ISecret | undefined,
+    constructIdPrefix: string
+  ): ecs.ContainerImage {
+    // Pull out the image name and tag from the image URI if it's an ECR image
+    const ecrImageUriRegex = new RegExp(
+      `^${config.accountNumber}\\.dkr\\.ecr\\.${config.region}\\.amazonaws\\.com/(.*)[:@](.*)$`
+    );
+    const nameTagMatches = ecrImageUriRegex.exec(imageName);
+    const serverImageName = nameTagMatches?.[1];
+    const serverImageTag = nameTagMatches?.[2];
+    if (serverImageName && serverImageTag) {
+      // Creating an ecr repository image will automatically grant fine-grained permissions to ecs to access the image
+      const ecrRepo = Repository.fromRepositoryArn(
+        this,
+        `${constructIdPrefix}ImageRepo`,
+        `arn:aws:ecr:${config.region}:${config.accountNumber}:repository/${serverImageName}`
+      );
+      return ecs.ContainerImage.fromEcrRepository(ecrRepo, serverImageTag);
+    }
+
+    // Otherwise, use the standard container image
+    return ecs.ContainerImage.fromRegistry(imageName, { credentials });
+  }
+
+  /**
+   * Adds sidecar containers and a FireLens log router to a task definition.
+   * @param taskDefinition - The task definition to add containers to.
+   * @param config - The infra config (for FireLens and registry settings).
+   * @param additionalContainers - The sidecar container definitions.
+   * @param credentials - Optional registry credentials.
+   * @param idPrefix - Optional prefix for construct IDs to avoid collisions.
+   */
+  private addSidecarContainers(
+    taskDefinition: ecs.FargateTaskDefinition,
+    config: MedplumInfraConfig,
+    additionalContainers: NonNullable<MedplumInfraConfig['additionalContainers']> | undefined,
+    credentials: secretsmanager.ISecret | undefined,
+    idPrefix?: string
+  ): void {
+    const prefix = idPrefix ? `${idPrefix}` : '';
+    for (const container of additionalContainers ?? EMPTY) {
+      taskDefinition.addContainer(`${prefix}AdditionalContainer-${container.name}`, {
+        containerName: container.name,
+        image: this.getContainerImage(config, container.image, credentials, `${prefix || 'Server'}-${container.name}`),
+        command: container.command,
+        environment: container.environment,
+        logging: this.logDriver,
+        essential: container.essential ?? false,
+      });
+    }
+
+    if (config.fireLens?.enabled) {
+      taskDefinition.addFirelensLogRouter(`${prefix}FireLensRouter`, {
+        image: ecs.ContainerImage.fromRegistry('public.ecr.aws/aws-observability/aws-for-fluent-bit:stable'),
+        essential: true,
+        firelensConfig: config.fireLens.logRouterConfig as ecs.FirelensConfig,
+        environment: config.fireLens.environment,
+      });
+    }
+  }
+
+  /**
+   * Adds CPU-based auto-scaling to a Fargate service.
+   * @param service - The Fargate service to add auto-scaling to.
+   * @param autoScaling - The auto-scaling configuration, or undefined to skip.
+   * @param idPrefix - Optional prefix for the scaling policy construct ID.
+   */
+  private addAutoScaling(
+    service: ecs.FargateService,
+    autoScaling: MedplumInfraConfig['fargateAutoScaling'],
+    idPrefix?: string
+  ): void {
+    if (!autoScaling) {
+      return;
+    }
+    const prefix = idPrefix ?? '';
+    const scaling = service.autoScaleTaskCount({
+      minCapacity: autoScaling.minCapacity,
+      maxCapacity: autoScaling.maxCapacity,
+    });
+    scaling.scaleOnCpuUtilization(`${prefix}CpuScaling`, {
+      targetUtilizationPercent: autoScaling.targetUtilizationPercent,
+      scaleInCooldown: Duration.seconds(autoScaling.scaleInCooldown),
+      scaleOutCooldown: Duration.seconds(autoScaling.scaleOutCooldown),
+    });
+  }
+
+  /**
+   * Adds RDS and Redis dependencies to a Fargate service so it is created after the data stores.
+   * @param service - The Fargate service to add dependencies to.
+   * @param purposeRedisClusters - Purpose-specific Redis clusters to add as dependencies.
+   */
+  private addServiceDependencies(
+    service: ecs.FargateService,
+    purposeRedisClusters: { cluster: elasticache.CfnReplicationGroup }[]
+  ): void {
+    if (this.rdsCluster) {
+      service.node.addDependency(this.rdsCluster);
+    }
+    if (this.rdsProxy) {
+      service.node.addDependency(this.rdsProxy);
+    }
+    service.node.addDependency(this.redisCluster);
+    for (const { cluster } of purposeRedisClusters) {
+      service.node.addDependency(cluster);
+    }
+  }
+
+  /**
+   * Creates an additional Fargate service to run background jobs. If `workers` is not specified in the
+   * service's configuration AND no MEDPLUM_WORKERS* environment variables are present, all background
+   * workers are run on this service.
+   *
+   * The service shares the same cluster, VPC, security group, and dependencies as the primary service,
+   * but is not added to the ALB and uses a `,env` config suffix for env var overrides.
+   * @param config - The infra config.
+   * @param service - The additional service definition.
+   * @param containerRegistryCredentials - Optional registry credentials.
+   * @param purposeRedisClusters - Purpose-specific Redis clusters to add as dependencies.
+   */
+  private createWorkerService(
+    config: MedplumInfraConfig,
+    service: NonNullable<MedplumInfraConfig['workerServices']>[number],
+    containerRegistryCredentials: secretsmanager.ISecret | undefined,
+    purposeRedisClusters: { cluster: elasticache.CfnReplicationGroup }[]
+  ): void {
+    const name = config.name;
+    const region = config.region;
+    const serviceId = service.id + 'Worker';
+
+    const serviceTaskDef = new ecs.FargateTaskDefinition(this, `${serviceId}TaskDefinition`, {
+      memoryLimitMiB: service.serverMemory ?? config.serverMemory,
+      cpu: service.serverCpu ?? config.serverCpu,
+      taskRole: this.taskRole,
+    });
+
+    const serviceImage = service.serverImage ?? config.serverImage;
+    const serviceCommand = region === 'us-east-1' ? `aws:/medplum/${name}/,env` : `aws:${region}:/medplum/${name}/,env`;
+    const serviceEnv = { ...config.environment, ...service.environment };
+
+    // enable all workers if no worker config specified for this service
+    if (!service.workers && !Object.keys(service.environment ?? {}).some((k) => k.startsWith('MEDPLUM_WORKERS'))) {
+      serviceEnv['MEDPLUM_WORKERS_ENABLED'] = JSON.stringify(['*']);
+    }
+
+    serviceTaskDef.addContainer(`${serviceId}Container`, {
+      image: this.getContainerImage(config, serviceImage, containerRegistryCredentials, serviceId),
+      command: [serviceCommand],
+      logging: this.logDriver,
+      environment: serviceEnv,
+    });
+
+    // Add port mappings for ECS health checks (not for ALB)
+    serviceTaskDef.defaultContainer?.addPortMappings({
+      containerPort: config.apiPort,
+      hostPort: config.apiPort,
+    });
+
+    this.addSidecarContainers(
+      serviceTaskDef,
+      config,
+      service.additionalContainers ?? config.additionalContainers,
+      containerRegistryCredentials,
+      serviceId
+    );
+
+    const serviceFargate = new ecs.FargateService(this, `${serviceId}FargateService`, {
+      cluster: this.ecsCluster,
+      taskDefinition: serviceTaskDef,
+      assignPublicIp: false,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      },
+      desiredCount: service.desiredCount,
+      securityGroups: [this.fargateSecurityGroup],
+      healthCheckGracePeriod: Duration.minutes(5),
+      minHealthyPercent: 100, // 50% is the default
+    });
+
+    // Add dependencies - same as primary service
+    this.addServiceDependencies(serviceFargate, purposeRedisClusters);
+
+    // Optional auto-scaling
+    this.addAutoScaling(serviceFargate, service.fargateAutoScaling, serviceId);
+  }
+
+  private createRedisCluster(
+    id: string,
+    options: { nodeType?: string; securityGroupId?: string; engine?: string; engineVersion?: string }
+  ): {
+    securityGroup: ec2.ISecurityGroup;
+    password: secretsmanager.ISecret;
+    cluster: elasticache.CfnReplicationGroup;
+    secrets: secretsmanager.ISecret;
+  } {
+    let securityGroup: ec2.ISecurityGroup;
+    if (options.securityGroupId) {
+      securityGroup = ec2.SecurityGroup.fromSecurityGroupId(this, `${id}SecurityGroup`, options.securityGroupId);
+    } else {
+      securityGroup = new ec2.SecurityGroup(this, `${id}SecurityGroup`, {
+        vpc: this.vpc,
+        description: `${id} Security Group`,
+        allowAllOutbound: false,
+      });
+      securityGroup.applyRemovalPolicy(RemovalPolicy.RETAIN);
+    }
+
+    const password = new secretsmanager.Secret(this, `${id}Password`, {
+      generateSecretString: {
+        secretStringTemplate: '{}',
+        generateStringKey: 'password',
+        excludeCharacters: '@%*()_+=`~{}|[]\\:";\'?,./',
+      },
+    });
+    password.applyRemovalPolicy(RemovalPolicy.RETAIN);
+
+    const cluster = new elasticache.CfnReplicationGroup(this, `${id}Cluster`, {
+      engine: options.engine ?? 'Redis',
+      engineVersion: options.engineVersion ?? '6.x',
+      cacheNodeType: options.nodeType ?? 'cache.t4g.medium',
+      replicationGroupDescription: `${id}ReplicationGroup`,
+      authToken: password.secretValueFromJson('password').toString(),
+      transitEncryptionEnabled: true,
+      atRestEncryptionEnabled: true,
+      multiAzEnabled: true,
+      cacheSubnetGroupName: this.redisSubnetGroup.ref,
+      numNodeGroups: 1,
+      replicasPerNodeGroup: 1,
+      securityGroupIds: [securityGroup.securityGroupId],
+    });
+    cluster.node.addDependency(password);
+    cluster.applyRemovalPolicy(RemovalPolicy.RETAIN);
+
+    const secrets = new secretsmanager.Secret(this, `${id}Secrets`, {
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({
+          host: cluster.attrPrimaryEndPointAddress,
+          port: cluster.attrPrimaryEndPointPort,
+          password: password.secretValueFromJson('password').toString(),
+          tls: {},
+        }),
+        generateStringKey: 'unused',
+      },
+    });
+    secrets.node.addDependency(password);
+    secrets.node.addDependency(cluster);
+    secrets.applyRemovalPolicy(RemovalPolicy.RETAIN);
+
+    return { securityGroup, password, cluster, secrets };
+  }
+
+  /**
+   * Creates an Application Load Balancer with an HTTPS listener and a target group pointing to the Fargate service.
+   * @param stackName - The name of the stack, used for naming the WAF.
+   * @param namePrefix - Prefix for construct IDs to avoid collisions (e.g., 'Mtls' for the mTLS load balancer).
+   * @param port - The port for the target group health checks and Fargate container (default: config.apiPort).
+   * @param internetFacing - Whether the load balancer is internet-facing (default: config.apiInternetFacing).
+   * @param certificateArn - The ARN of the SSL certificate for the HTTPS listener.
+   * @param loadBalancerLoggingPrefix - Optional prefix for load balancer access log object keys.
+   * @param wafIpSetArn - Optional WAF IP set ARN.
+   * @param wafLogGroupName - Optional WAF log group name.
+   * @param wafLogGroupCreate - Optional WAF log group create flag.
+   * @param mutualAuthentication - Optional mutual authentication configuration for the HTTPS listener.
+   * @param loadBalancingAlgorithmType - Optional target group load balancing algorithm.
+   * @returns The created Application Load Balancer.
+   */
+  private createLoadBalancer(
+    stackName: string,
+    namePrefix: string,
+    port: number,
+    internetFacing: boolean,
+    certificateArn: string,
+    loadBalancerLoggingPrefix: string | undefined,
+    wafIpSetArn: string | undefined,
+    wafLogGroupName: string | undefined,
+    wafLogGroupCreate: boolean | undefined,
+    mutualAuthentication?: elbv2.MutualAuthentication,
+    loadBalancingAlgorithmType?: elbv2.TargetGroupLoadBalancingAlgorithmType
+  ): elbv2.ApplicationLoadBalancer {
+    const targetGroup = new elbv2.ApplicationTargetGroup(this, `${namePrefix}TargetGroup`, {
+      vpc: this.vpc,
+      port,
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      healthCheck: {
+        path: '/healthcheck',
+        interval: Duration.seconds(30),
+        timeout: Duration.seconds(3),
+        healthyThresholdCount: 2,
+        unhealthyThresholdCount: 5,
+      },
+      loadBalancingAlgorithmType,
+      targets: [this.fargateService],
+    });
+
+    const loadBalancer = new elbv2.ApplicationLoadBalancer(this, `${namePrefix}LoadBalancer`, {
+      vpc: this.vpc,
+      internetFacing,
+      http2Enabled: true,
+      securityGroup: this.loadBalancerSecurityGroup,
+    });
+
+    if (this.loggingBucket) {
+      loadBalancer.logAccessLogs(this.loggingBucket, loadBalancerLoggingPrefix);
+    }
+
+    loadBalancer.addListener(`${namePrefix}HttpsListener`, {
+      port: 443,
+      certificates: [{ certificateArn }],
+      sslPolicy: elbv2.SslPolicy.RECOMMENDED_TLS,
+      defaultAction: elbv2.ListenerAction.forward([targetGroup]),
+      mutualAuthentication,
+    });
+
+    // WAF
+    const waf = buildWaf(
+      this,
+      `${namePrefix}BackEndWAF`,
+      `${stackName}-${namePrefix}BackEndWAF`,
+      'REGIONAL',
+      wafIpSetArn,
+      wafLogGroupName,
+      wafLogGroupCreate
+    );
+
+    // Create an association between the load balancer and the WAF
+    const wafAssociation = new wafv2.CfnWebACLAssociation(this, `${namePrefix}LoadBalancerAssociation`, {
+      resourceArn: loadBalancer.loadBalancerArn,
+      webAclArn: waf.attrArn,
+    });
+    assert.ok(wafAssociation, 'Failed to create WAF association');
+
+    return loadBalancer;
+  }
+}
+
+function resolveLoadBalancingAlgorithmType(
+  value: string | undefined
+): elbv2.TargetGroupLoadBalancingAlgorithmType | undefined {
+  if (!value) {
+    return undefined;
+  }
+  switch (value) {
+    case 'round_robin':
+      return elbv2.TargetGroupLoadBalancingAlgorithmType.ROUND_ROBIN;
+    case 'least_outstanding_requests':
+      return elbv2.TargetGroupLoadBalancingAlgorithmType.LEAST_OUTSTANDING_REQUESTS;
+    case 'weighted_random':
+      return elbv2.TargetGroupLoadBalancingAlgorithmType.WEIGHTED_RANDOM;
+    default:
+      throw new Error(
+        `Invalid loadBalancerAlgorithm '${value}'. Expected one of: round_robin, least_outstanding_requests, weighted_random`
+      );
+  }
+}
+
+function getPostgresEngine(
+  version?: string,
+  defaultVersion?: rds.AuroraPostgresEngineVersion
+): { engine: rds.IClusterEngine; majorVersion: string } {
+  if (!version) {
+    if (defaultVersion) {
+      return {
+        engine: rds.DatabaseClusterEngine.auroraPostgres({ version: defaultVersion }),
+        majorVersion: defaultVersion.auroraPostgresMajorVersion,
+      };
+    }
+    throw new Error('Missing or empty RDS version: ' + version);
+  }
+
+  const majorVersion = version.slice(0, version.indexOf('.'));
+  return {
+    engine: rds.DatabaseClusterEngine.auroraPostgres({
+      version: rds.AuroraPostgresEngineVersion.of(version, majorVersion, {
+        s3Import: true,
+        s3Export: true,
+      }),
+    }),
+    majorVersion,
+  };
+}
+
+function getDatabaseClusterId(majorVersion?: string): string {
+  return majorVersion ? `DatabaseClusterPG${majorVersion}` : 'DatabaseCluster';
+}

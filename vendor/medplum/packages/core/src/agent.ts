@@ -1,0 +1,177 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { LogMessage } from './logger';
+
+export const ReturnAckCategory = {
+  /** The first ACK message received is the one returned */
+  FIRST: 'first',
+  /** Only return upon receiving a positive application-level ACK (AA, AE, or AR), or if a commit-level error occurred */
+  APPLICATION: 'application',
+} as const;
+export type ReturnAckCategory = (typeof ReturnAckCategory)[keyof typeof ReturnAckCategory];
+
+export interface BaseAgentMessage {
+  type: string;
+  callback?: string;
+}
+
+export interface BaseAgentRequestMessage extends BaseAgentMessage {
+  accessToken?: string;
+}
+
+export interface AgentError extends BaseAgentMessage {
+  type: 'agent:error';
+  body: string;
+}
+
+export interface AgentConnectRequest extends BaseAgentRequestMessage {
+  type: 'agent:connect:request';
+  agentId: string;
+}
+
+export interface AgentConnectResponse extends BaseAgentMessage {
+  type: 'agent:connect:response';
+}
+
+export interface AgentHeartbeatRequest extends BaseAgentRequestMessage {
+  type: 'agent:heartbeat:request';
+}
+
+export interface AgentHeartbeatResponse extends BaseAgentMessage {
+  type: 'agent:heartbeat:response';
+  version: string;
+}
+
+export interface AgentTransmitRequest extends BaseAgentRequestMessage {
+  type: 'agent:transmit:request';
+  channel?: string;
+  remote: string;
+  contentType: string;
+  body: string;
+  returnAck?: ReturnAckCategory;
+}
+
+export interface AgentTransmitResponse extends BaseAgentMessage {
+  type: 'agent:transmit:response';
+  channel?: string;
+  remote: string;
+  contentType: string;
+  statusCode?: number;
+  body: string;
+}
+
+export interface AgentReloadConfigRequest extends BaseAgentRequestMessage {
+  type: 'agent:reloadconfig:request';
+}
+
+export interface AgentReloadConfigResponse extends BaseAgentMessage {
+  type: 'agent:reloadconfig:response';
+  statusCode: number;
+}
+
+export interface AgentUpgradeRequest extends BaseAgentRequestMessage {
+  type: 'agent:upgrade:request';
+  version?: string;
+  force?: boolean;
+}
+
+export interface AgentUpgradeResponse extends BaseAgentMessage {
+  type: 'agent:upgrade:response';
+  statusCode: number;
+}
+
+export interface AgentLogsRequest extends BaseAgentRequestMessage {
+  type: 'agent:logs:request';
+  limit?: number;
+  /**
+   * Opaque pagination cursor. Pass the `nextBefore` value from a previous
+   * response to fetch the next (older) page; treat it as an opaque token rather
+   * than parsing it. Logs are read across all rotated log files, not just the
+   * most recent one.
+   */
+  before?: string;
+}
+
+export interface AgentLogsResponse extends BaseAgentMessage {
+  type: 'agent:logs:response';
+  statusCode: number;
+  logs: LogMessage[];
+  /** Whether more (older) log entries exist beyond the ones returned in this page. */
+  hasMore: boolean;
+  /**
+   * Opaque cursor to pass as `before` in a subsequent request to fetch the next
+   * older page. Only present when `hasMore` is true.
+   */
+  nextBefore?: string;
+}
+
+export type AgentRttStats = {
+  count: number;
+  min: number;
+  max: number;
+  average: number;
+  p50: number;
+  p95: number;
+  p99: number;
+  pendingCount: number;
+};
+
+export type AgentChannelStats = {
+  rtt: AgentRttStats;
+};
+
+export type AgentStatPrimitiveValue = string | boolean | number;
+export type AgentStatValue =
+  | AgentStatPrimitiveValue
+  | Record<
+      string,
+      AgentStatPrimitiveValue | Record<string, AgentStatPrimitiveValue | Record<string, AgentStatPrimitiveValue>>
+    >;
+
+/**
+ * Statistics about the running agent. Known fields are typed; additional
+ * fields may be present and are preserved as unknown values.
+ */
+export interface AgentStats {
+  hl7ConnectionsOpen: number;
+  ping: number;
+  webSocketQueueDepth: number;
+  hl7QueueDepth: number;
+  hl7ClientCount: number;
+  live: boolean;
+  outstandingHeartbeats: number;
+  channelStats: Record<string, AgentChannelStats>;
+  clientStats: Record<string, AgentChannelStats>;
+  [key: string]: AgentStatValue;
+}
+
+export interface AgentStatsRequest extends BaseAgentRequestMessage {
+  type: 'agent:stats:request';
+}
+
+export interface AgentStatsResponse extends BaseAgentMessage {
+  type: 'agent:stats:response';
+  statusCode: number;
+  stats: AgentStats;
+}
+
+export type AgentRequestMessage =
+  | AgentConnectRequest
+  | AgentHeartbeatRequest
+  | AgentTransmitRequest
+  | AgentReloadConfigRequest
+  | AgentUpgradeRequest
+  | AgentLogsRequest
+  | AgentStatsRequest;
+
+export type AgentResponseMessage =
+  | AgentConnectResponse
+  | AgentHeartbeatResponse
+  | AgentTransmitResponse
+  | AgentReloadConfigResponse
+  | AgentUpgradeResponse
+  | AgentLogsResponse
+  | AgentStatsResponse
+  | AgentError;
+
+export type AgentMessage = AgentRequestMessage | AgentResponseMessage;

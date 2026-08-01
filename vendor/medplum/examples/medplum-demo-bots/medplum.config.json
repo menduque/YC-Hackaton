@@ -1,0 +1,154 @@
+{
+  "bots": [
+    {
+      "name": "ai-realtime-questionnaire",
+      "id": "",
+      "source": "src/questionnaire-bots/ai-realtime/ai-realtime-questionnaire.ts",
+      "dist": "dist/questionnaire-bots/ai-realtime/ai-realtime-questionnaire.js"
+    },
+    {
+      "name": "hello-patient",
+      "id": "",
+      "source": "src/hello-patient.ts",
+      "dist": "dist/hello-patient.js"
+    },
+    {
+      "name": "patient-intake",
+      "id": "",
+      "source": "src/patient-intake.ts",
+      "dist": "dist/patient-intake.js"
+    },
+    {
+      "name": "create-pdf",
+      "id": "",
+      "source": "src/create-pdf.ts",
+      "dist": "dist/create-pdf.js"
+    },
+    {
+      "name": "sample-account-setup",
+      "id": "",
+      "source": "src/sample-account-setup.ts",
+      "dist": "dist/sample-account-setup.js"
+    },
+    {
+      "name": "sample-account-staging",
+      "id": "",
+      "source": "src/sample-account-setup.ts",
+      "dist": "dist/sample-account-setup.js"
+    },
+    {
+      "name": "hl7-bot",
+      "id": "",
+      "source": "src/hl7-bot.ts",
+      "dist": "dist/hl7-bot.js"
+    },
+    {
+      "name": "finalize-report",
+      "id": "",
+      "source": "src/finalize-report.ts",
+      "dist": "dist/finalize-report.js"
+    },
+    {
+      "name": "stripe-create-invoice",
+      "id": "",
+      "source": "src/stripe-bots/stripe-create-invoice.ts",
+      "dist": "dist/stripe-bots/stripe-create-invoice.js"
+    },
+    {
+      "name": "merge-bot",
+      "id": "",
+      "source": "src/deduplication/merge-bot.ts",
+      "dist": "dist/deduplication/merge-bot.js"
+    },
+    {
+      "name": "patient-deduplication",
+      "id": "",
+      "source": "src/deduplication/patient-deduplication.ts",
+      "dist": "dist/deduplication/patient-deduplication.js"
+    },
+    {
+      "name": "find-matching-patients",
+      "id": "",
+      "source": "src/deduplication/find-matching-patients.ts",
+      "dist": "dist/deduplication/find-matching-patients.js"
+    },
+    {
+      "name": "merge-matching-patients",
+      "id": "",
+      "source": "src/deduplication/merge-matching-patients.ts",
+      "dist": "dist/deduplication/merge-matching-patients.js"
+    },
+    {
+      "name": "welcome-patient",
+      "id": "",
+      "source": "./src/bots-with-shared-library/welcome-patient.ts",
+      "dist": "./dist/bots-with-shared-library/welcome-patient.js"
+    },
+    {
+      "name": "goodbye-patient",
+      "id": "",
+      "source": "./src/bots-with-shared-library/goodbye-patient.ts",
+      "dist": "./dist/bots-with-shared-library/welcome-patient.js"
+    },
+    {
+      "name": "demo-slack-bot",
+      "id": "",
+      "source": "./src/slack-bots/demo-slack-bot.ts",
+      "dist": "./dist/slack-bots/demo-slack-bot.js"
+    },
+    {
+      "name": "cms-1500-pdf",
+      "id": "",
+      "source": "src/billing-bots/cms-1500-pdf.ts",
+      "dist": "dist/billing-bots/cms-1500-pdf.js"
+    },
+    {
+      "name": "epic-query-patient",
+      "id": "",
+      "source": "src/epic/epic-query-patient.ts",
+      "dist": "dist/epic/epic-query-patient.js"
+    },
+    {
+      "name": "metriport-patient-bot",
+      "id": "",
+      "source": "src/metriport-bots/metriport-patient-bot.ts",
+      "dist": "dist/metriport-bots/metriport-patient-bot.js"
+    },
+    {
+      "name": "metriport-consolidated-data-webhook",
+      "id": "",
+      "source": "src/metriport-bots/metriport-consolidated-data-webhook.ts",
+      "dist": "dist/metriport-bots/metriport-consolidated-data-webhook.js"
+    },
+    {
+      "name": "twilio-voice-webhook",
+      "id": "",
+      "source": "src/twilio/voice-webhook.ts",
+      "dist": "dist/twilio/voice-webhook.js"
+    },
+    {
+      "name": "ai-fhir-request-tools",
+      "id": "",
+      "source": "src/spaces-bots/fhir-translator-bot.ts",
+      "dist": "dist/spaces-bots/fhir-translator-bot.js"
+    },
+    {
+      "name": "ai-resource-summary-sse",
+      "id": "",
+      "source": "src/spaces-bots/fhir-summary-bot.ts",
+      "dist": "dist/spaces-bots/fhir-summary-bot.js"
+    },
+    {
+      "name": "ai-component-generator-sse",
+      "id": "",
+      "source": "src/spaces-bots/fhir-visualizer-bot.ts",
+      "dist": "dist/spaces-bots/fhir-visualizer-bot.js"
+    },
+    {
+      "name": "nppes-lookup",
+      "id": "",
+      "source": "src/nppes-lookup.ts",
+      "dist": "dist/nppes-lookup.js"
+    }
+  ]
+}

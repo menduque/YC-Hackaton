@@ -1,0 +1,367 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import { createReference } from '@medplum/core';
+import type { DiagnosticReport, Observation, Reference } from '@medplum/fhirtypes';
+import { HomerDiagnosticReport, HomerSimpson, MockClient, TestOrganization } from '@medplum/mock';
+import { MedplumProvider } from '@medplum/react-hooks';
+import {
+  HealthGorillaDiagnosticReport,
+  HealthGorillaObservation1,
+  HealthGorillaObservation2,
+  HealthGorillaObservationGroup1,
+  HealthGorillaObservationGroup2,
+  HealthGorillaQuestDiagnosticReport,
+  HealthGorillaQuestLabLenexa,
+  HealthGorillaQuestLabSacramento,
+  HealthGorillaQuestObservation1,
+  HealthGorillaQuestObservation2,
+  HealthGorillaQuestObservation3,
+  HealthGorillaQuestObservationGroup1,
+  HealthGorillaQuestObservationGroup2,
+  HealthGorillaQuestObservationGroup3,
+  HealthGorillaQuestParentLab,
+  HealthGorillaQuestServiceRequest,
+} from '../stories/healthgorilla';
+import { CreatinineObservation, ExampleReport } from '../stories/referenceLab';
+import { act, render, screen } from '../test-utils/render';
+import type { DiagnosticReportDisplayProps } from './DiagnosticReportDisplay';
+import { DiagnosticReportDisplay } from './DiagnosticReportDisplay';
+
+const syntheaReport: DiagnosticReport = {
+  resourceType: 'DiagnosticReport',
+  id: 'e508a0f9-17f1-49a9-8151-0e21cb19098f',
+  status: 'final',
+  specimen: HomerDiagnosticReport.specimen,
+  category: [
+    {
+      coding: [
+        {
+          system: 'http://loinc.org',
+          code: '34117-2',
+          display: 'History and physical note',
+        },
+        {
+          system: 'http://loinc.org',
+          code: '51847-2',
+          display: 'Evaluation+Plan note',
+        },
+      ],
+    },
+  ],
+  code: {
+    coding: [
+      {
+        system: 'http://loinc.org',
+        code: '34117-2',
+        display: 'History and physical note',
+      },
+      {
+        system: 'http://loinc.org',
+        code: '51847-2',
+        display: 'Evaluation+Plan note',
+      },
+    ],
+  },
+  subject: {
+    reference: 'Patient/55a90b63-a6a5-4a4d-86fb-40d156eb55b1',
+  },
+  encounter: {
+    reference: 'Encounter/cc8f80b9-4ca6-48a2-a916-10992175e8d9',
+  },
+  effectiveDateTime: '2019-03-14T06:47:41-07:00',
+  issued: '2019-03-14T06:47:41.275-07:00',
+  performer: [
+    {
+      reference: 'Practitioner?identifier=http://hl7.org/fhir/sid/us-npi|9999909389',
+      display: 'Dr. Antonietta855 Kilback373',
+    },
+  ],
+  presentedForm: [
+    {
+      contentType: 'text/plain; charset=utf-8',
+      data: 'SGVsbG8gd29ybGQ=',
+    },
+  ],
+  conclusion: 'All values within normal range',
+};
+
+const medplum = new MockClient();
+
+describe('DiagnosticReportDisplay', () => {
+  let exampleReport: DiagnosticReport;
+
+  function setup(args: DiagnosticReportDisplayProps): void {
+    render(
+      <MedplumProvider medplum={medplum}>
+        <DiagnosticReportDisplay {...args} />
+      </MedplumProvider>
+    );
+  }
+
+  beforeAll(async () => {
+    const obs = await medplum.createResource(CreatinineObservation);
+    exampleReport = await medplum.createResource<DiagnosticReport>({
+      ...ExampleReport,
+      id: undefined,
+      result: [createReference(obs)],
+    });
+
+    for (const resource of [
+      HealthGorillaQuestParentLab,
+      HealthGorillaQuestLabLenexa,
+      HealthGorillaQuestLabSacramento,
+      HealthGorillaQuestObservation1,
+      HealthGorillaQuestObservation2,
+      HealthGorillaQuestObservation3,
+      HealthGorillaQuestObservationGroup1,
+      HealthGorillaQuestObservationGroup2,
+      HealthGorillaQuestObservationGroup3,
+      HealthGorillaQuestServiceRequest,
+    ]) {
+      await medplum.createResource(resource);
+    }
+  });
+
+  test('Renders by value', async () => {
+    await act(async () => {
+      setup({ value: HomerDiagnosticReport });
+    });
+
+    // See packages/mock/src/mocks/simpsons.ts
+    expect(screen.getByText('Homer Simpson')).toBeDefined();
+    expect(screen.getByText('Diagnostic Report')).toBeDefined();
+    expect(screen.getByText('110 mmHg / 75 mmHg')).toBeDefined();
+    expect(screen.getByText('> 50 x')).toBeDefined();
+    expect(screen.getByText('Specimen hemolyzed. Results may be affected.', { exact: false })).toBeDefined();
+    expect(screen.getByText('Specimen lipemic. Results may be affected.', { exact: false })).toBeDefined();
+    expect(screen.getByText('Critical high')).toBeInTheDocument();
+    expect(screen.getByText('Critical high')).toHaveStyle('background:');
+    expect(screen.getAllByText('final')).toHaveLength(8);
+    expect(screen.getAllByText('corrected')).toHaveLength(1);
+    screen.getAllByText('final').forEach((badge) => expect(badge).toHaveClass('mantine-Badge-label'));
+  });
+
+  test('Renders by value with hideSubject', async () => {
+    await act(async () => {
+      setup({ value: HomerDiagnosticReport, hideSubject: true });
+    });
+
+    // See packages/mock/src/mocks/simpsons.ts
+    expect(screen.queryByText('Homer Simpson')).toBeNull();
+    expect(screen.getByText('Diagnostic Report')).toBeDefined();
+    expect(screen.getByText('110 mmHg / 75 mmHg')).toBeDefined();
+    expect(screen.getByText('> 50 x')).toBeDefined();
+    expect(screen.getByText('Specimen hemolyzed. Results may be affected.', { exact: false })).toBeDefined();
+    expect(screen.getByText('Specimen lipemic. Results may be affected.', { exact: false })).toBeDefined();
+    expect(screen.getByText('Critical high')).toBeInTheDocument();
+    expect(screen.getByText('Critical high')).toHaveStyle('background:');
+    expect(screen.getAllByText('final')).toHaveLength(8);
+    expect(screen.getAllByText('corrected')).toHaveLength(1);
+    screen.getAllByText('final').forEach((badge) => expect(badge).toHaveClass('mantine-Badge-label'));
+  });
+
+  test('Renders by reference', async () => {
+    await act(async () => {
+      setup({ value: { reference: 'DiagnosticReport/123' } });
+    });
+
+    // See packages/mock/src/mocks/simpsons.ts
+    expect(screen.getByText('Diagnostic Report')).toBeDefined();
+    expect(screen.getByText('110 mmHg / 75 mmHg')).toBeDefined();
+    expect(screen.getByText('10 - 50 x')).toBeDefined();
+    expect(screen.getByText('> 50 x')).toBeDefined();
+  });
+
+  test('Renders presented form', async () => {
+    await act(async () => {
+      setup({ value: syntheaReport });
+    });
+    expect(screen.getByText('Diagnostic Report')).toBeDefined();
+    expect(screen.getByText('Hello world')).toBeDefined();
+  });
+
+  test('Renders performer', async () => {
+    await act(async () => {
+      setup({ value: exampleReport });
+    });
+
+    expect(screen.getByText('Test Organization')).not.toBeNull();
+    // The observation performer is resolved to the actual resource name ("Alice Smith"),
+    // rather than the raw reference display ("Dr. Alice Smith")
+    expect(screen.getAllByText('Alice Smith')).toHaveLength(2);
+  });
+
+  test('Renders performer organization address', async () => {
+    await act(async () => {
+      setup({ value: exampleReport });
+    });
+
+    // See packages/mock/src/mocks/alice.ts for the TestOrganization address
+    expect(screen.getByText('123 Test Street, Springfield, CA, 90210')).not.toBeNull();
+  });
+
+  test('Renders performing labs', async () => {
+    await act(async () => {
+      setup({ value: HealthGorillaQuestDiagnosticReport });
+    });
+
+    expect(screen.getByText('Performing Labs')).toBeInTheDocument();
+
+    // Two observations were performed by the Lenexa lab: it appears in two
+    // observation table rows, but only once in the performing labs footer
+    expect(screen.getAllByText('Quest Diagnostics-Lenexa')).toHaveLength(3);
+    expect(screen.getByText('10101 Renner Blvd, Lenexa, KS, 66219-9752')).toBeInTheDocument();
+    expect(screen.getByText('William Becker D.O., MPH')).toBeInTheDocument();
+
+    // One observation table row and one performing labs footer row
+    expect(screen.getAllByText('Quest Diagnostics-Sacramento - Northgate')).toHaveLength(2);
+    expect(screen.getByText('3714 Northgate Blvd, Sacramento, CA, 95834-1617')).toBeInTheDocument();
+    expect(screen.getByText('M. Rose Akin, M.D., FCAP')).toBeInTheDocument();
+
+    // The parent lab has no address or contact, so it is not in the footer:
+    // it only appears in the report header and the observation group rows
+    expect(screen.getAllByText('HGDX Quest')).toHaveLength(4);
+  });
+
+  test('Renders ordering requester', async () => {
+    await act(async () => {
+      setup({ value: HealthGorillaQuestDiagnosticReport });
+    });
+
+    expect(screen.getByText('Ordering')).toBeInTheDocument();
+    expect(screen.getByText('Alice Smith')).toBeInTheDocument();
+  });
+
+  test('Renders performing labs from server references', async () => {
+    const obs = await medplum.createResource<Observation>({
+      resourceType: 'Observation',
+      status: 'final',
+      code: { text: 'Glucose' },
+      performer: [createReference(TestOrganization)],
+    });
+    const report = await medplum.createResource<DiagnosticReport>({
+      resourceType: 'DiagnosticReport',
+      status: 'final',
+      code: { text: 'Glucose Panel' },
+      result: [createReference(obs)],
+    });
+
+    await act(async () => {
+      setup({ value: report });
+    });
+
+    expect(screen.getByText('Performing Labs')).toBeInTheDocument();
+    // Once in the observation table performer column, once in the performing labs footer
+    expect(screen.getAllByText('Test Organization')).toHaveLength(2);
+    expect(screen.getByText('123 Test Street, Springfield, CA, 90210')).toBeInTheDocument();
+  });
+
+  test('Hides performing labs when there are none', async () => {
+    await act(async () => {
+      setup({ value: HomerDiagnosticReport });
+    });
+
+    expect(screen.queryByText('Performing Labs')).toBeNull();
+  });
+
+  test('Renders observation category', async () => {
+    await act(async () => {
+      setup({ value: exampleReport });
+    });
+    expect(screen.getByText('Diagnostic Report')).toBeDefined();
+    expect(screen.getByText('Day 2')).toBeDefined();
+  });
+
+  test('Renders observation note', async () => {
+    await act(async () => {
+      setup({ value: exampleReport });
+    });
+    expect(screen.getByText('Previously reported as 167 mg/dL on 2/3/2023, 8:40:14 PM')).not.toBeNull();
+  });
+
+  test('Hide observation note', async () => {
+    await act(async () => {
+      setup({ value: exampleReport, hideObservationNotes: true });
+    });
+    expect(screen.queryByText('Previously reported as 167 mg/dL on 2/3/2023, 8:40:14 PM')).toBeNull();
+  });
+
+  test('Renders specimen note', async () => {
+    await act(async () => {
+      setup({ value: syntheaReport });
+    });
+
+    expect(screen.queryByText('Specimen hemolyzed. Results may be affected.')).not.toBeNull();
+    expect(screen.queryByText('Specimen lipemic. Results may be affected.')).not.toBeNull();
+  });
+
+  test('Renders specimen collected time', async () => {
+    await act(async () => {
+      setup({ value: syntheaReport });
+    });
+
+    expect(screen.queryByText('Collected:')).not.toBeNull();
+  });
+
+  test('Renders hide specimen info', async () => {
+    await act(async () => {
+      setup({ value: syntheaReport, hideSpecimenInfo: true });
+    });
+
+    expect(screen.queryByText('Collected:')).toBeNull();
+  });
+
+  test('Renders observation group', async () => {
+    await medplum.createResource(HealthGorillaObservation1);
+    await medplum.createResource(HealthGorillaObservation2);
+    await medplum.createResource(HealthGorillaObservationGroup1);
+    await medplum.createResource(HealthGorillaObservationGroup2);
+    await medplum.createResource(HealthGorillaDiagnosticReport);
+
+    await act(async () => {
+      setup({ value: HealthGorillaDiagnosticReport });
+    });
+
+    expect(screen.getByText('Example Panel Day 1')).toBeInTheDocument();
+    expect(screen.getByText('Above high normal')).toBeInTheDocument();
+    expect(screen.getByText('Example Panel Day 2')).toBeInTheDocument();
+    expect(screen.getByText('Normal')).toBeInTheDocument();
+  });
+
+  test('No specimen header if no specimen', async () => {
+    await act(async () => {
+      setup({ value: { resourceType: 'DiagnosticReport' } as DiagnosticReport });
+    });
+
+    expect(screen.getByText('Diagnostic Report')).toBeInTheDocument();
+    expect(screen.queryByText('Specimen')).toBeNull();
+  });
+
+  test('Handles observation cycles', async () => {
+    // This is a technically valid Observation resource,
+    // although it doesn't really make sense.
+    // It uses "Observation Grouping" to create a cycle.
+    let obs = await medplum.createResource({
+      resourceType: 'Observation',
+      status: 'final',
+      code: { text: 'test' },
+      valueString: 'XYZ',
+    });
+    obs = await medplum.updateResource({ ...obs, hasMember: [createReference(obs) as Reference<Observation>] });
+
+    const report: DiagnosticReport = {
+      resourceType: 'DiagnosticReport',
+      status: 'final',
+      code: { text: 'test' },
+      subject: createReference(HomerSimpson),
+      result: [createReference(obs)],
+    };
+
+    await act(async () => {
+      setup({ value: report });
+    });
+
+    expect(screen.getByText('Diagnostic Report')).toBeDefined();
+    expect(screen.getByText('XYZ')).toBeDefined();
+  });
+});

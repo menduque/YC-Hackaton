@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type cors from 'cors';
+import type { Request } from 'express';
+import { getConfig } from './config/loader';
+
+const exposedHeaders = ['Content-Location', 'ETag', 'Last-Modified', 'Location', 'RateLimit'];
+
+/**
+ * CORS configuration.
+ * @param req - The express request.
+ * @param callback - The cors plugin callback.
+ */
+export const corsOptions: cors.CorsOptionsDelegate<Request> = (req, callback) => {
+  const origin = req.header('Origin');
+  const allow = isOriginAllowed(origin) && isPathAllowed(req.path);
+  if (allow) {
+    callback(null, { origin, credentials: true, exposedHeaders, maxAge: 600 });
+  } else {
+    callback(null, { origin: false });
+  }
+};
+
+function isOriginAllowed(origin: string | undefined): boolean {
+  if (!origin) {
+    return false;
+  }
+
+  const config = getConfig();
+  if (config.appBaseUrl.startsWith(origin) || config.allowedOrigins === '*') {
+    return true;
+  }
+
+  if (config.allowedOrigins) {
+    const whitelist = config.allowedOrigins.split(',');
+    return whitelist.some((item) => item.trim() === origin);
+  }
+
+  return false;
+}
+
+const prefixes = [
+  '/.well-known/',
+  '/admin/',
+  '/auth/',
+  '/cds-services',
+  '/dicomweb/',
+  '/email/',
+  '/fhir/',
+  '/fhircast/',
+  '/oauth2/',
+  '/keyvalue/',
+  '/shl/',
+  '/storage/',
+];
+
+function isPathAllowed(path: string): boolean {
+  return prefixes.some((prefix) => path.startsWith(prefix));
+}

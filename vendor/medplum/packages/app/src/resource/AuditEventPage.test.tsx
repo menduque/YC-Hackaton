@@ -1,0 +1,86 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import { getReferenceString } from '@medplum/core';
+import type { AuditEvent, Bot } from '@medplum/fhirtypes';
+import { MockClient } from '@medplum/mock';
+import { act, fireEvent, renderAppRoutes, screen } from '../test-utils/render';
+
+const medplum = new MockClient();
+
+describe('AuditEventPage', () => {
+  function setup(url: string): void {
+    renderAppRoutes(medplum, url);
+  }
+
+  test('Renders', async () => {
+    const bot = await medplum.createResource<Bot>({
+      resourceType: 'Bot',
+    });
+
+    const auditEvent = await medplum.createResource({
+      resourceType: 'AuditEvent',
+      entity: [
+        {
+          what: {
+            reference: getReferenceString(bot),
+          },
+        },
+      ],
+    } as AuditEvent);
+
+    // load bot page
+    await act(async () => {
+      setup(`/${getReferenceString(bot)}`);
+    });
+
+    const eventTab = screen.getByRole('tab', { name: 'Event' });
+
+    // click on Event tab
+    await act(async () => {
+      fireEvent.click(eventTab);
+    });
+
+    expect(screen.getByText(`${auditEvent.id}`)).toBeInTheDocument();
+
+    // click on a audit event
+    await act(async () => {
+      fireEvent.click(screen.getByText(`${auditEvent.id}`));
+    });
+
+    expect(screen.getByLabelText(`Actions for AuditEvent/${auditEvent.id}`));
+  });
+
+  test('Renders test changes', async () => {
+    const bot = await medplum.createResource<Bot>({
+      resourceType: 'Bot',
+    });
+
+    const auditEvent = await medplum.createResource({
+      resourceType: 'AuditEvent',
+      entity: [
+        {
+          what: {
+            reference: getReferenceString(bot),
+          },
+        },
+      ],
+    } as AuditEvent);
+
+    // directly load bot audit event page
+    await act(async () => {
+      setup(`/${getReferenceString(bot)}/event`);
+    });
+
+    // click on a audit event
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Last Updated' }));
+    });
+
+    const sortButton = await screen.findByText('Sort Newest to Oldest');
+    await act(async () => {
+      fireEvent.click(sortButton);
+    });
+
+    expect(screen.getByText(`${auditEvent.id}`)).toBeInTheDocument();
+  });
+});

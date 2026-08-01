@@ -1,0 +1,40 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { Hl7CloseEvent, Hl7EnhancedAckSentEvent, Hl7ErrorEvent, Hl7MessageEvent, Hl7WarningEvent } from './events';
+
+export interface Hl7EventMap {
+  message: Hl7MessageEvent;
+  error: Hl7ErrorEvent;
+  warning: Hl7WarningEvent;
+  close: Hl7CloseEvent;
+  enhancedAckSent: Hl7EnhancedAckSentEvent;
+}
+
+export abstract class Hl7Base extends EventTarget {
+  addEventListener<K extends keyof Hl7EventMap>(
+    type: K,
+    listener: ((event: Hl7EventMap[K]) => void) | EventListenerObject | null,
+    options?: boolean | AddEventListenerOptions
+  ): void;
+
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions
+  ): void {
+    super.addEventListener(type, listener, options);
+  }
+  removeEventListener<K extends keyof Hl7EventMap>(
+    type: K,
+    listener: ((event: Hl7EventMap[K]) => void) | EventListenerObject | null,
+    options?: boolean | AddEventListenerOptions
+  ): void;
+
+  removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions
+  ): void {
+    super.removeEventListener(type, listener, options);
+  }
+}

@@ -1,0 +1,275 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+
+/*
+ * Parse HL7 SMART scope strings.
+ * https://build.fhir.org/ig/HL7/smart-app-launch/scopes-and-launch-context.html
+ */
+
+import {
+  ContentType,
+  deepClone,
+  EMPTY,
+  OAuthGrantType,
+  OAuthSigningAlgorithm,
+  OAuthTokenAuthMethod,
+  readInteractions,
+  splitN,
+} from '@medplum/core';
+import type { AccessPolicy, AccessPolicyResource, Patient, Reference } from '@medplum/fhirtypes';
+import type { Request, Response } from 'express';
+import qs from 'node:querystring';
+import { getConfig } from '../config/loader';
+import type { AuthState } from '../oauth/middleware';
+import type { PopulatedAccessPolicy } from './accesspolicy';
+
+const smartScopeFormat = /^(patient|user|system)\/(\w+|\*)\.(read|write|c?r?u?d?s?|\*)$/;
+
+export interface SmartScope {
+  readonly permissionType: 'patient' | 'user' | 'system';
+  readonly resourceType: string;
+  readonly scope: string;
+  readonly criteria?: string;
+}
+
+/**
+ * Handles requests for the SMART configuration.
+ * See: https://build.fhir.org/ig/HL7/smart-app-launch/conformance.html
+ * See: https://build.fhir.org/ig/HL7/smart-app-launch/scopes-and-launch-context.html
+ * @param _req - The HTTP request.
+ * @param res - The HTTP response.
+ */
+export function smartConfigurationHandler(_req: Request, res: Response): void {
+  const config = getConfig();
+  res
+    .status(200)
+    .contentType(ContentType.JSON)
+    .json({
+      issuer: config.issuer,
+      jwks_uri: config.jwksUrl,
+      authorization_endpoint: config.authorizeUrl,
+      grant_types_supported: [
+        OAuthGrantType.ClientCredentials,
+        OAuthGrantType.AuthorizationCode,
+        OAuthGrantType.RefreshToken,
+        OAuthGrantType.TokenExchange,
+      ],
+      token_endpoint: config.tokenUrl,
+      token_endpoint_auth_methods_supported: [
+        OAuthTokenAuthMethod.ClientSecretBasic,
+        OAuthTokenAuthMethod.ClientSecretPost,
+        OAuthTokenAuthMethod.PrivateKeyJwt,
+      ],
+      token_endpoint_auth_signing_alg_values_supported: [
+        OAuthSigningAlgorithm.RS256,
+        OAuthSigningAlgorithm.RS384,
+        OAuthSigningAlgorithm.ES384,
+      ],
+      scopes_supported: [
+        'patient/*.rs',
+        'user/*.cruds',
+        'openid',
+        'fhirUser',
+        'launch',
+        'launch/patient',
+        'offline_access',
+        'online_access',
+      ],
+      response_types_supported: ['code'],
+      introspection_endpoint: config.introspectUrl,
+      capabilities: [
+        'authorize-post',
+        'permission-v1',
+        'permission-v2',
+        'client-confidential-asymmetric',
+        'client-confidential-symmetric',
+        'client-public',
+        'context-banner',
+        'context-ehr-patient',
+        'context-ehr-encounter',
+        'context-standalone-patient',
+        'context-style',
+        'launch-ehr',
+        'launch-standalone',
+        'permission-offline',
+        'permission-patient',
+        'permission-user',
+        'sso-openid-connect',
+      ],
+      code_challenge_methods_supported: ['S256'],
+    });
+}
+
+/**
+ * Handles requests for the SMART App Styling.
+ * See: https://build.fhir.org/ig/HL7/smart-app-launch/scopes-and-launch-context.html#styling
+ * @param _req - The HTTP request.
+ * @param res - The HTTP response.
+ */
+export function smartStylingHandler(_req: Request, res: Response): void {
+  res.status(200).contentType(ContentType.JSON).json({
+    color_background: '#edeae3',
+    color_error: '#9e2d2d',
+    color_highlight: '#69b5ce',
+    color_modal_backdrop: '',
+    color_success: '#498e49',
+    color_text: '#303030',
+    dim_border_radius: '6px',
+    dim_font_size: '13px',
+    dim_spacing_size: '20px',
+    font_family_body: "Georgia, Times, 'Times New Roman', serif",
+    font_family_heading: "'HelveticaNeue-Light', Helvetica, Arial, 'Lucida Grande', sans-serif;",
+  });
+}
+
+/**
+ * Parses an OAuth scope string into a list of SMART scopes.
+ * Only includes SMART scopes, all other scopes are ignored.
+ * @param scope - The OAuth scope string.
+ * @returns Array of SMART scopes.
+ */
+export function parseSmartScopes(scope: string | undefined): SmartScope[] {
+  const result: SmartScope[] = [];
+
+  for (const scopeTerm of scope?.split(' ') ?? EMPTY) {
+    const parsed = parseSmartScopeString(scopeTerm);
+    if (parsed) {
+      result.push(parsed);
+    }
+  }
+
+  return result;
+}
+
+export function parseSmartScopeString(scope: string): SmartScope | undefined {
+  const [baseScope, query] = splitN(scope, '?', 2);
+  const match = smartScopeFormat.exec(baseScope);
+
+  if (!match) {
+    return undefined;
+  }
+
+  let criteria: string | undefined;
+  if (query) {
+    // Parse and normalize query parameters, without affecting string encoding, for safety
+    const parsed = qs.parse(query, '&', '=', { decodeURIComponent: (s) => s });
+    criteria = qs.stringify(parsed, '&', '=', { encodeURIComponent: (s) => s });
+  }
+
+  return {
+    permissionType: match[1] as 'patient' | 'user' | 'system',
+    resourceType: match[2],
+    scope: normalizeV2ScopeString(match[3]),
+    criteria,
+  };
+}
+
+function normalizeV2ScopeString(str: string): string {
+  switch (str) {
+    case '*':
+      return 'cruds';
+    case 'read':
+      return 'rs';
+    case 'write':
+      return 'cud';
+    default:
+      return str;
+  }
+}
+
+/**
+ * Applies SMART scopes to an AccessPolicy.
+ * If there are no SMART scopes, the AccessPolicy is returned unmodified.
+ * If there is no access policy, a new one is created.
+ * Otherwise, the AccessPolicy is modified to only include the SMART scopes.
+ * @param accessPolicy - The original access policy.
+ * @param authState - The user's authentication state.
+ * @returns Updated access policy with the OAuth scope(s) applied.
+ */
+export function applySmartScopes(accessPolicy: PopulatedAccessPolicy, authState: AuthState): PopulatedAccessPolicy {
+  const scope = authState.login.scope;
+  const smartScopes = parseSmartScopes(scope);
+  if (smartScopes.length === 0) {
+    // No SMART scopes, so no changes to the access policy
+    return accessPolicy;
+  }
+  let context: Reference<Patient> | undefined;
+  if (authState.smartAppLaunch?.patient) {
+    context = authState.smartAppLaunch?.patient;
+  } else if (authState.membership.profile.reference?.startsWith('Patient/')) {
+    context = authState.membership.profile as Reference<Patient>;
+  }
+
+  // Build an access policy that is the intersection of the existing access policy and the SMART scopes
+  return intersectSmartScopes(accessPolicy, smartScopes, context);
+}
+
+function intersectSmartScopes(
+  accessPolicy: AccessPolicy,
+  smartScope: SmartScope[],
+  context?: Reference<Patient>
+): PopulatedAccessPolicy {
+  const result: PopulatedAccessPolicy = { ...accessPolicy, resource: [] };
+  for (const policy of accessPolicy.resource ?? EMPTY) {
+    if (policy.resourceType === '*') {
+      for (const scope of smartScope) {
+        const merged = mergeAccessPolicyWithScope(policy, scope, context);
+        if (merged) {
+          merged.resourceType = scope.resourceType;
+          result.resource.push(merged);
+        }
+      }
+    } else {
+      for (const scope of getScopesForResourceType(smartScope, policy.resourceType)) {
+        const merged = mergeAccessPolicyWithScope(policy, scope, context);
+        if (merged) {
+          result.resource.push(merged);
+        }
+      }
+    }
+  }
+  return result;
+}
+
+const readOnlyScope = /^[rs]+$/;
+function mergeAccessPolicyWithScope(
+  policy: AccessPolicyResource,
+  scope: SmartScope,
+  context?: Reference<Patient>
+): AccessPolicyResource | undefined {
+  const result = deepClone(policy);
+  if (result.criteria?.startsWith('*') && scope.resourceType !== '*') {
+    result.criteria = result.criteria.replace('*', scope.resourceType);
+  }
+
+  if (readOnlyScope.exec(scope.scope)) {
+    result.readonly = true;
+    result.interaction = result.interaction?.filter((interaction) => readInteractions.includes(interaction));
+    if (result.interaction?.length === 0) {
+      return undefined;
+    }
+  }
+  if (scope.criteria) {
+    appendCriteria(result, scope.criteria);
+  }
+  if (scope.permissionType === 'patient') {
+    if (context) {
+      appendCriteria(result, `_compartment=${context.reference}`);
+    }
+  }
+  return result;
+}
+
+function appendCriteria(policy: AccessPolicyResource, criteria: string): void {
+  if (!policy.criteria) {
+    policy.criteria = `${policy.resourceType}?${criteria}`;
+  } else if (policy.criteria.endsWith('&')) {
+    policy.criteria += criteria;
+  } else {
+    policy.criteria += '&' + criteria;
+  }
+}
+
+function getScopesForResourceType(scopes: SmartScope[], resourceType: string): SmartScope[] {
+  return scopes.filter((s) => s.resourceType === resourceType || s.resourceType === '*');
+}

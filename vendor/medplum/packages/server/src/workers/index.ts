@@ -1,0 +1,85 @@
+// SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
+// SPDX-License-Identifier: Apache-2.0
+import type { BackgroundJobContext, WithId } from '@medplum/core';
+import type { Resource } from '@medplum/fhirtypes';
+import type { MedplumServerConfig, WorkerName } from '../config/types';
+import { getLogger, globalLogger } from '../logger';
+import { initBatchWorker } from './batch';
+import { initCronWorker } from './cron';
+import { initDataWarehouseSyncWorker } from './data-warehouse-sync';
+import { initDicomWorker } from './dicom';
+import { addDispatchJobs, initDispatchWorker } from './dispatch';
+import { initDownloadWorker } from './download';
+import { initLambdaCleanerWorker } from './lambda-cleaner';
+import { initPostDeployMigrationWorker } from './post-deploy-migration';
+import { initReindexWorker } from './reindex';
+import { initSetAccountsWorker } from './set-accounts';
+import { initSubscriptionWorker } from './subscription';
+import type { WorkerInitializer } from './utils';
+import { applyGlobalConcurrency, getMedplumBullmqConfig, queueRegistry } from './utils';
+
+const workerDefs: { name: WorkerName; init: WorkerInitializer }[] = [
+  { name: 'dispatch', init: initDispatchWorker },
+  { name: 'subscription', init: initSubscriptionWorker },
+  { name: 'download', init: initDownloadWorker },
+  { name: 'cron', init: initCronWorker },
+  { name: 'reindex', init: initReindexWorker },
+  { name: 'batch', init: initBatchWorker },
+  { name: 'post-deploy-migration', init: initPostDeployMigrationWorker },
+  { name: 'set-accounts', init: initSetAccountsWorker },
+  { name: 'lambda-cleaner', init: initLambdaCleanerWorker },
+  { name: 'data-warehouse-sync', init: initDataWarehouseSyncWorker },
+  { name: 'dicom', init: initDicomWorker },
+];
+
+/**
+ * Initializes all background workers.
+ * @param config - The config to initialize the workers with. Should contain `redis` and optionally `bullmq` fields.
+ */
+export async function initWorkers(config: MedplumServerConfig): Promise<void> {
+  globalLogger.debug('Initializing workers...');
+  const enabledWorkers = config.workers?.enabled;
+  const enableAll = config.workers?.enabled?.includes('*');
+
+  for (const { name, init } of workerDefs) {
+    const workerEnabled = enableAll || enabledWorkers === undefined || enabledWorkers.includes(name);
+    const { name: queueName, queue, worker } = init(config, { workerEnabled });
+    // a queue can be disabled, in which case, don't register it
+    if (queue) {
+      queueRegistry.add(queueName, queue, worker);
+      // Fail startup if the global concurrency limit cannot be applied: it is unsafe to run the
+      // workers without it configured correctly.
+      await applyGlobalConcurrency(queue, getMedplumBullmqConfig(config, name));
+    }
+  }
+  globalLogger.debug('Workers initialized');
+}
+
+/**
+ * Shuts down all background workers.
+ */
+export async function closeWorkers(): Promise<void> {
+  await Promise.all(queueRegistry.closeAll());
+}
+
+/**
+ * Adds all background jobs for a given resource.
+ * @param resource - The resource that was created or updated.
+ * @param previousVersion - The previous version of the resource, if available.
+ * @param context - The background job context.
+ */
+export async function addBackgroundJobs(
+  resource: WithId<Resource>,
+  previousVersion: Resource | undefined,
+  context: BackgroundJobContext
+): Promise<void> {
+  try {
+    await addDispatchJobs(resource, previousVersion, context);
+  } catch (err) {
+    getLogger().error('Error adding dispatch jobs', {
+      resourceType: resource.resourceType,
+      resource: resource.id,
+      err,
+    });
+  }
+}
