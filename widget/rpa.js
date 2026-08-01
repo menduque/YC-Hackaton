@@ -526,6 +526,93 @@
     return { encontrado: pacientes.length > 0, cantidad: pacientes.length, pacientes };
   }
 
+  // ------------------------------------------- busqueda VISIBLE en pacientes.php
+  // buscarPaciente() de arriba resuelve por fetch y es la que contesta al agente:
+  // es instantanea y no toca la pestania. Lo de aca abajo es el mismo trabajo
+  // hecho a la vista, para que en la demo se vea a Mira usando el EHR. Nunca es
+  // la fuente de la respuesta, asi que si algo falla la llamada sigue igual.
+
+  const enPacientes = () => /\/pacientes\.php/.test(location.pathname);
+
+  /** El form de busqueda tal como esta montado en la pagina (no por fetch). */
+  function formBusquedaVivo() {
+    return (
+      document.getElementById(FORM_BUSQUEDA) ||
+      document.querySelector(`form[name="${FORM_BUSQUEDA}"]`) ||
+      [...document.forms].find((f) => f.querySelector(`[name="${CAMPO_DNI}"]`)) ||
+      null
+    );
+  }
+
+  /** Escribe el DNI en el campo real y deja el foco marcado para la camara. */
+  async function tipearDni(dni, { tick = 45, pausa = 140 } = {}) {
+    const form = formBusquedaVivo();
+    if (!form) throw new RpaStop('No encontre el formulario de busqueda en pacientes.php');
+    const campo = form.querySelector(`[name="${CAMPO_DNI}"]`);
+    if (!campo) throw new RpaStop(`No encontre el campo ${CAMPO_DNI}`);
+
+    const tipo = form.querySelector(`[name="${CAMPO_TIPO_DOC}"]`);
+    if (tipo) await elegir(tipo, 'DNI', { pausa });
+
+    highlight(campo);
+    await escribir(campo, String(dni), { tick, pausa, chunks: 10 });
+    await sleep(pausa);
+    return { form, campo };
+  }
+
+  /**
+   * Aprieta el buscar del form. Es un <input type=image>, asi que un .click()
+   * alcanza: el navegador manda el POST con las coordenadas y navega la pestania
+   * a la misma URL, ahora con resultados.
+   */
+  function ejecutarBusqueda(form) {
+    const submit =
+      form.querySelector('input[type=image][name^="button"]') ||
+      form.querySelector('input[type=image]') ||
+      form.querySelector('input[type=submit]');
+    if (!submit) throw new RpaStop('No encontre el boton de buscar en pacientes.php');
+    highlight(submit);
+    submit.click();
+    return true;
+  }
+
+  /** Los resultados ya renderizados en la pagina actual. */
+  function resultadosEnPagina() {
+    return parsearResultados(document.documentElement.outerHTML);
+  }
+
+  /**
+   * Abre la ficha del paciente cuyo documento coincide.
+   *
+   * OJO: es lo unico de este archivo que NO esta verificado contra el DOM real —
+   * nunca vi la fila de resultados de pacientes.php. Asume que la fila tiene un
+   * <a> que lleva a la ficha y agarra el primero. Si el supuesto no se cumple
+   * devuelve false en vez de romper: la llamada ya fue contestada por fetch.
+   */
+  function abrirFicha(dni) {
+    const objetivo = String(dni ?? '').replace(/[.\s-]/g, '');
+    const tabla = [...document.querySelectorAll('table')].find((t) =>
+      [...(t.rows[0]?.cells || [])].some((c) => c.textContent.trim() === HEADER_RESULTADOS),
+    );
+    if (!tabla || tabla.rows.length < 2) return false;
+
+    const fila =
+      [...tabla.rows]
+        .slice(1)
+        .find((tr) =>
+          [...tr.cells].some(
+            (td) => td.textContent.trim().replace(/[.\s-]/g, '') === objetivo,
+          ),
+        ) || tabla.rows[1];
+    if (!fila) return false;
+
+    const link = fila.querySelector('a[href]');
+    if (!link) return false;
+    highlight(fila);
+    link.click();
+    return true;
+  }
+
   // ------------------------------------------------- historia clinica (ficha)
 
   /** "30-07-2026 19:54:06 - Intervino el Dr. DAPONTE, Franco" */
@@ -711,6 +798,13 @@
     resetPanel,
     buscarPaciente,
     parsearResultados,
+    PACIENTES_URL,
+    enPacientes,
+    formBusquedaVivo,
+    tipearDni,
+    ejecutarBusqueda,
+    resultadosEnPagina,
+    abrirFicha,
     enFicha,
     leerHistoria,
     parsearFicha,

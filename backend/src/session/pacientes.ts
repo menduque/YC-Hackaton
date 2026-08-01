@@ -22,6 +22,13 @@ export interface PacienteIdentificado {
   fechaNacimiento?: string;
   domicilio?: string;
   procedencia?: string;
+  /**
+   * What the chart already says, so the script never has to ask for it on air.
+   * The caller only ever *confirms* these ("do you still have OSDE?"), which is
+   * why they have to survive until preparar_turno builds the payload.
+   */
+  cobertura?: string;
+  usaLC?: boolean;
   /** paciente.php?p_id=…&id=… — la ficha de donde se lee la historia clinica. */
   fichaUrl?: string;
   /** MedPlum Patient id, filled in as soon as the mid-call upsert lands. */

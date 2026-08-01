@@ -15,6 +15,7 @@
  *   npx tsx src/scripts/callsim.ts --port 8789 --callId demo
  */
 import WebSocket from "ws";
+import { readFileSync } from "node:fs";
 import { config } from "../config.js";
 
 const argv = process.argv.slice(2);
@@ -31,18 +32,24 @@ const CALL_ID = arg("callId", "demo");
  * front-loads insurance and contact lenses (both of which the prompt asks for)
  * so the script stays in sync no matter what order the agent asks in.
  */
-const CALLER_LINES = [
-  "Hi, I would like to book an appointment with the eye doctor please.",
-  "My name is Juan Perez, my I D number is 3 0 1 2 3 4 5 6, " +
-    "I have OSDE insurance, and no, I do not wear contact lenses.",
-  "September twenty ninth, twenty twenty six.",
-  // Default asks for noon on purpose: it is free in the agenda but is NOT one
-  // of the three the agent reads out, so it regression-tests the bug where the
-  // agent treated the times it happened to mention as the only ones available.
-  // --pedir "the first time you mentioned" to just take what it offers.
-  arg("pedir", "Twelve o'clock works great, thank you."),
-  "No, that is everything. Thank you very much.",
-];
+/**
+ * `--script foo.json` swaps in a different caller: a JSON array of lines, one
+ * per agent turn. Lets you rehearse the demo script without editing this file.
+ */
+const SCRIPT_FILE = arg("script", "");
+const CALLER_LINES: string[] = SCRIPT_FILE
+  ? JSON.parse(readFileSync(SCRIPT_FILE, "utf8"))
+  : [
+      "Hey, I want to see Doctor Franco Daponte as soon as possible.",
+      "My I D number is 4 1 1 7 2 7 4 5.",
+      "My eyesight has gotten worse, I have glaucoma.",
+      // Everything the third beat asks for, in one breath. Deliberately does NOT
+      // name a date: the agent has to offer the two soonest openings itself.
+      "Unfortunately I do still have OSDE coverage, yes, I'm taking NyQuil to " +
+        "sleep better as medication. And it's fairly urgent.",
+      arg("pedir", "August thirteenth at three PM works great, thank you."),
+      "No, that is everything. Thank you very much.",
+    ];
 
 // 16 kHz, 16-bit mono => 32 bytes per ms. 20 ms frames = 640 bytes.
 const FRAME_BYTES = 640;

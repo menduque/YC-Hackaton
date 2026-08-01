@@ -14,6 +14,7 @@
   if (!R) return;
 
   const JOB_KEY = 'oido_demo_job_v1';
+  const BUSQUEDA_KEY = 'oido_busqueda_v1';
   const JOB_TTL_MS = 10 * 60 * 1000;
 
   const VELOCIDADES = {
@@ -74,6 +75,75 @@
   }
 
   let job = leerJob();
+
+  // -------------------------------------------------- busqueda visible (demo)
+  //
+  // El agente ya recibio su respuesta por fetch antes de que esto arranque, asi
+  // que todo lo de aca es puramente escenico: navegar a pacientes.php, tipear el
+  // DNI, buscar y abrir la ficha. Cruza dos navegaciones completas, asi que el
+  // estado vive en sessionStorage igual que el job de agendamiento.
+
+  function leerBusqueda() {
+    try {
+      const raw = sessionStorage.getItem(BUSQUEDA_KEY);
+      if (!raw) return null;
+      const b = JSON.parse(raw);
+      if (!b || Date.now() - (b.startedAt || 0) > JOB_TTL_MS) {
+        sessionStorage.removeItem(BUSQUEDA_KEY);
+        return null;
+      }
+      return b;
+    } catch {
+      return null;
+    }
+  }
+
+  function guardarBusqueda(b) {
+    try {
+      sessionStorage.setItem(BUSQUEDA_KEY, JSON.stringify(b));
+    } catch {
+      /* noop */
+    }
+  }
+
+  function borrarBusqueda() {
+    try {
+      sessionStorage.removeItem(BUSQUEDA_KEY);
+    } catch {
+      /* noop */
+    }
+  }
+
+  /** Arranca el paseo visible por pacientes.php. Nunca tira: es decorativo. */
+  function mostrarBusqueda(dni) {
+    if (!dni) return;
+    guardarBusqueda({ dni: String(dni), phase: 'buscar', startedAt: Date.now() });
+    if (R.enPacientes()) rutaBusqueda();
+    else location.href = new URL(R.PACIENTES_URL, location.href).href;
+  }
+
+  async function rutaBusqueda() {
+    const b = leerBusqueda();
+    if (!b || !R.enPacientes()) return;
+    try {
+      // Ya hay resultados en pantalla: solo queda abrir la ficha.
+      if (b.phase === 'resultados') {
+        borrarBusqueda();
+        const abierta = R.abrirFicha(b.dni);
+        log(abierta ? 'ok' : 'warn', abierta ? 'Ficha del paciente abierta.' : 'Resultados a la vista (no encontre el link a la ficha).');
+        return;
+      }
+
+      if (b.phase !== 'buscar') return;
+      const { form } = await R.tipearDni(b.dni, { tick: 55, pausa: 160 });
+      log('info', `Buscando DNI ${b.dni} en Treelan…`);
+      guardarBusqueda({ ...b, phase: 'resultados' });
+      R.ejecutarBusqueda(form); // navega: seguimos en 'resultados' al recargar
+    } catch (e) {
+      borrarBusqueda();
+      log('warn', `Busqueda visible interrumpida: ${(e && e.message) || e}`);
+    }
+  }
 
   // --------------------------------------------------------------------- UI
 
@@ -195,6 +265,9 @@
   }
 
   function log(t, txt) {
+    // La consola siempre, el panel solo si hay un job. La busqueda visible corre
+    // en pacientes.php, donde normalmente todavia no hay ninguno.
+    console.log(`[oido] ${t}: ${txt}`);
     if (!job) return;
     job.log = job.log || [];
     job.log.push({ t, txt });
@@ -263,6 +336,10 @@
       avisarBackend(false, { error: 'hora invalida' });
       return { ok: false, error: 'hora invalida' };
     }
+
+    // Agendar gana: si quedo un paseo por pacientes.php a medio hacer, se
+    // descarta antes de navegar al calendario.
+    borrarBusqueda();
 
     // `medplum` trae los ids que la llamada ya persistio (Patient/Appointment/
     // Task). Viaja dentro del job porque el RPA cruza una navegacion completa y
@@ -453,6 +530,9 @@
   // ----------------------------------------------------------------- arranque
 
   function ruta() {
+    // La busqueda visible vive en pacientes.php y es independiente del job de
+    // agendamiento, asi que se rutea aparte.
+    if (R.enPacientes()) rutaBusqueda();
     if (!job) return;
     if (job.phase === 'calendario' && enCalendarios()) {
       fase1();
@@ -527,10 +607,12 @@
           R.buscarPaciente(q)
             .then((result) => {
               const linea = `Busqueda ${q.dni || q.apellido || ''}: ${result.cantidad} paciente/s`;
-              // log() no-opea hasta que existe un job; la consola siempre sirve.
-              console.log('[oido]', linea);
               log(result.encontrado ? 'ok' : 'info', linea);
+              // Contestar PRIMERO: el backend espera esto para decidir que dice
+              // Mira, y navegar la pestania mata este content script. Recien
+              // despues arranca el paseo visible por pacientes.php.
               sendResponse({ ok: true, result });
+              if (result.encontrado && q.dni) mostrarBusqueda(q.dni);
             })
             .catch((e) => {
               const err = (e && e.message) || String(e);

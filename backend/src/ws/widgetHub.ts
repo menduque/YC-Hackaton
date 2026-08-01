@@ -50,11 +50,13 @@ export function registerWidgetHub(wss: WebSocketServer) {
     set.add(ws);
     console.log(`[widget-hub] connected callId=${callId} (${set.size} client/s)`);
 
-    // Three inbound messages:
+    // Four inbound messages:
     // - {type:'ping'}: keepalive. The extension's service worker sends it every
     //   ~15s; replying keeps its MV3 idle-timer from sleeping mid-call.
     // - {type:'OIDO_RESULT', id, ok, result, error}: the reply to a
     //   requestWidget() we sent earlier.
+    // - {type:'OIDO_DELIVERY', ok:false, error}: the payload never made it off
+    //   the service worker — no Treelan tab to hand it to. The RPA never ran.
     // - {type:'OIDO_RPA_RESULT', taskId, ok, ...}: unsolicited, once the fill on
     //   the Treelan page finishes. Nobody is awaiting it — it closes the MedPlum
     //   Task instead.
@@ -71,6 +73,17 @@ export function registerWidgetHub(wss: WebSocketServer) {
       }
       if (msg?.type === "OIDO_RESULT" && typeof msg.id === "string") {
         settle(msg.id, msg);
+        return;
+      }
+      // The extension got the payload but could not hand it to Treelan (tab
+      // closed, session expired). pushSchedule already reported "delivered",
+      // so without this the appointment vanishes without a trace. This fires
+      // *before* the RPA ever starts, so it is not the same signal as
+      // OIDO_RPA_RESULT below — that one reports how the fill itself went.
+      if (msg?.type === "OIDO_DELIVERY" && msg.ok === false) {
+        console.error(
+          `[widget-hub] callId=${callId} the extension could NOT reach Treelan: ${msg.error}`,
+        );
         return;
       }
       if (msg?.type === "OIDO_RPA_RESULT" && typeof msg.taskId === "string") {
@@ -130,6 +143,15 @@ function settle(id: string, msg: any) {
   clearTimeout(p.timer);
   if (msg.ok === false) p.reject(new Error(msg.error || "Widget reported an error"));
   else p.resolve(msg.result);
+}
+
+/**
+ * Which callIds have a widget on the other end, and how many sockets each.
+ * The whole class of "the call went fine but nothing happened in Treelan" bugs
+ * is just this map being empty (or keyed by a callId nobody is listening on).
+ */
+export function connectedWidgets(): Record<string, number> {
+  return Object.fromEntries([...byCallId].map(([callId, set]) => [callId, set.size]));
 }
 
 /** Push the full appointment payload to any widget connected on this callId. */

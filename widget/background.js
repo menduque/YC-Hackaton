@@ -55,7 +55,11 @@ chrome.runtime.onMessageExternal.addListener((msg, _sender, sendResponse) => {
 // Puerto del backend de esta copia del repo. Cada workspace de Conductor corre
 // en el suyo (8787, 8788, 8789…): si cambias el PORT del .env, cambialo aca y
 // agregalo a manifest.host_permissions, si no el SW no puede abrir el WS.
-const OIDO_BACKEND_PORT = 8789;
+const OIDO_BACKEND_PORT = 8790;
+// callId: tiene que ser EL MISMO que usa el panel del micrófono. El panel lo
+// saca de ?callId= y si no hay, usa 'demo' — por eso hay que abrirlo SIN query
+// string. Si no coinciden, el push del backend no llega a ningún lado y la
+// llamada termina igual de bien: por eso conviene mirar /health -> widgets.
 const OIDO_BACKEND_WS = `ws://localhost:${OIDO_BACKEND_PORT}/v1/voice/stream?callId=demo`;
 let oidoWS = null;
 let oidoPing = null;
@@ -81,7 +85,21 @@ function ensureBackendWS() {
     try { msg = JSON.parse(ev.data); } catch { return; }
     if (!msg) return;
     if (msg.type === 'OIDO_SCHEDULE') {
-      reenviarATreelan(msg, () => {});
+      // El backend ya considero "entregado" el payload al mandarlo por el WS,
+      // pero todavia falta el salto que mas se cae: encontrar la pestania de
+      // Treelan. Si ese salto falla y nadie avisa, la llamada termina perfecta
+      // y en el EHR no pasa nada. Devolvemos el resultado para que quede en el
+      // log del backend.
+      reenviarATreelan(msg, (res) => {
+        if (res && res.ok !== false) return;
+        try {
+          oidoWS.send(JSON.stringify({
+            type: 'OIDO_DELIVERY',
+            ok: false,
+            error: (res && res.error) || 'el content script no respondio',
+          }));
+        } catch {}
+      });
       return;
     }
     // Busqueda de paciente y lectura de la historia clinica: a diferencia de

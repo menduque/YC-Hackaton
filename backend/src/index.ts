@@ -4,12 +4,22 @@ import { WebSocketServer } from "ws";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { config, vendorStatus } from "./config.js";
-import { registerWidgetHub, pushSchedule, setRpaResultHandler } from "./ws/widgetHub.js";
+import {
+  registerWidgetHub,
+  pushSchedule,
+  connectedWidgets,
+  setRpaResultHandler,
+} from "./ws/widgetHub.js";
 import { medplum } from "./clients/medplum.js";
 import { dispatchFunction } from "./functions/index.js";
 import { AGENT_FUNCTIONS } from "./deepgram/agentConfig.js";
 import { bridgeBrowserToDeepgram } from "./deepgram/bridge.js";
-import { agendaCompleta, normalizarFecha, reemplazarDia } from "./agenda/daponte.js";
+import {
+  agendaCompleta,
+  liberarTodo,
+  normalizarFecha,
+  reemplazarDia,
+} from "./agenda/daponte.js";
 import { consultarHistoria, guardarHistoria, historiaDe, resumenHistoria } from "./session/historias.js";
 import type { HistoriaTreelan } from "./session/historias.js";
 import type { TurnoPayload } from "./types.js";
@@ -39,7 +49,9 @@ app.use(express.static(join(__dirname, "..", "..", "panel")));
 
 // --- health / status ---
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, vendors: vendorStatus() });
+  // `widgets` is the one to look at when a call runs clean but Treelan never
+  // moves: {} means no extension is connected, and every push silently no-ops.
+  res.json({ ok: true, vendors: vendorStatus(), widgets: connectedWidgets() });
 });
 
 // The agent function schema, handy for the panel / debugging.
@@ -50,6 +62,16 @@ app.get("/v1/agent/functions", (_req, res) => {
 // Dr. Daponte's agenda — what the voice agent is allowed to offer.
 app.get("/v1/agenda", (req, res) => {
   res.json(agendaCompleta(req.query.callId ? String(req.query.callId) : undefined));
+});
+
+// Release every slot a rehearsal put on hold. Run this before the real demo:
+// each practice call holds the slot it booked, so without this the agent tells
+// the audience that the time they just asked for is taken.
+// MUST stay above /v1/agenda/:fecha — that route would match "reset" as a date.
+app.post("/v1/agenda/reset", (_req, res) => {
+  const liberados = liberarTodo();
+  console.log(`[agenda] ${liberados} hold/s released`);
+  res.json({ ok: true, liberados });
 });
 
 // Override one day with what the widget read off the real Treelan grid:

@@ -4,10 +4,37 @@ const WS_URL = `${location.protocol === "https:" ? "wss" : "ws"}://${location.ho
 
 const $ = (id) => document.getElementById(id);
 const btn = $("btn"), dot = $("dot"), statusEl = $("status"), log = $("log"), fns = $("fns");
+const timerEl = $("timer"), callLabel = $("calllabel");
 
 let ws, micCtx, playCtx, processor, source, stream;
 let nextTime = 0;
 let running = false;
+let tickId = null;
+
+/** Green phone → red hang-up, plus a live call timer. */
+function setCallUi(activa) {
+  btn.classList.toggle("stop", activa);
+  const label = activa ? "Cortar" : "Llamar";
+  btn.setAttribute("aria-label", activa ? "Cortar la llamada" : "Iniciar llamada");
+  btn.title = label;
+  callLabel.textContent = label;
+  timerEl.classList.toggle("on", activa);
+
+  clearInterval(tickId);
+  tickId = null;
+  if (!activa) {
+    timerEl.textContent = "00:00";
+    return;
+  }
+  const desde = Date.now();
+  const pintar = () => {
+    const s = Math.floor((Date.now() - desde) / 1000);
+    timerEl.textContent =
+      `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  };
+  pintar();
+  tickId = setInterval(pintar, 1000);
+}
 
 btn.onclick = () => (running ? stop() : start());
 
@@ -45,8 +72,7 @@ async function start() {
       ws.send(floatTo16BitPCM(ev.inputBuffer.getChannelData(0)).buffer);
     };
     running = true;
-    btn.textContent = "Cortar";
-    btn.classList.add("stop");
+    setCallUi(true);
     setStatus("en llamada", "on");
   };
 
@@ -103,8 +129,7 @@ function stop() {
 
 function teardown() {
   running = false;
-  btn.textContent = "Iniciar llamada";
-  btn.classList.remove("stop");
+  setCallUi(false);
   try { processor && (processor.onaudioprocess = null); } catch {}
   try { source && source.disconnect(); } catch {}
   try { stream && stream.getTracks().forEach((t) => t.stop()); } catch {}
@@ -152,7 +177,7 @@ function addMsg(role, content) {
     el.className = "msg " + (role === "user" ? "user" : "assistant");
     el.dataset.role = role;
     el.dataset.merge = "1";
-    el.innerHTML = `<div class="who">${role === "user" ? "Paciente" : "Recepción"}</div><div class="body"></div>`;
+    el.innerHTML = `<div class="who">${role === "user" ? "Paciente" : "Mira"}</div><div class="body"></div>`;
     el.querySelector(".body").textContent = content;
     log.appendChild(el);
   }
