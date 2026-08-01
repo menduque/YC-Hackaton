@@ -29,6 +29,8 @@ export interface PacienteIdentificado {
    */
   cobertura?: string;
   usaLC?: boolean;
+  /** Reason for their last visit, e.g. "Glaucoma" — the motivo fallback. */
+  ultimaVisita?: string;
   /** paciente.php?p_id=…&id=… — la ficha de donde se lee la historia clinica. */
   fichaUrl?: string;
   /** MedPlum Patient id, filled in as soon as the mid-call upsert lands. */

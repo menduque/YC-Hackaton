@@ -40,9 +40,12 @@ const SCRIPT_FILE = arg("script", "");
 const CALLER_LINES: string[] = SCRIPT_FILE
   ? JSON.parse(readFileSync(SCRIPT_FILE, "utf8"))
   : [
-      "Hey, I want to see Doctor Franco Daponte as soon as possible.",
+      // The concern is volunteered here, not answered later: Mira no longer asks
+      // "do you have a specific concern?", so this is the only place the motivo
+      // can come from.
+      "Hey, I want to see Doctor Franco Daponte as soon as possible. My eyesight " +
+        "has gotten worse, I have glaucoma.",
       "My I D number is 4 1 1 7 2 7 4 5.",
-      "My eyesight has gotten worse, I have glaucoma.",
       // Everything the third beat asks for, in one breath. Deliberately does NOT
       // name a date: the agent has to offer the two soonest openings itself.
       "Unfortunately I do still have OSDE coverage, yes, I'm taking NyQuil to " +
