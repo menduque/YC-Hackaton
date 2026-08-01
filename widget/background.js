@@ -25,14 +25,21 @@ function reenviarATreelan(msg, sendResponse) {
   chrome.tabs.query({ url: TREELAN_GLOB }, (tabs) => {
     const tab = (tabs || []).find((t) => t.id != null);
     if (!tab) {
+      // Sin este log el modo de falla es invisible: el payload de la llamada
+      // llega al service worker, no encuentra pestania, y el widget se queda
+      // mostrando el payload de ejemplo como si nunca hubiera habido llamada.
+      console.error('[oido] payload recibido pero NO hay pestania de Treelan abierta:', msg);
       sendResponse({ ok: false, error: 'No hay una pestania de Treelan abierta y logueada.' });
       return;
     }
+    console.log('[oido] payload de la llamada -> pestania', tab.id, msg);
     chrome.tabs.sendMessage(tab.id, msg, (resp) => {
       if (chrome.runtime.lastError) {
+        console.error('[oido] la pestania no recibio el payload:', chrome.runtime.lastError.message);
         sendResponse({ ok: false, error: chrome.runtime.lastError.message });
         return;
       }
+      console.log('[oido] la pestania arranco el RPA:', resp);
       sendResponse(resp || { ok: true });
     });
   });

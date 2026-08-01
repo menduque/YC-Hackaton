@@ -114,12 +114,18 @@ async function handleFunctionCalls(
   for (const call of calls) {
     const args = safeParse(call.arguments);
     tell(browser, { type: "function_call", name: call.name, arguments: args });
+    // Logged because "the widget showed hardcoded values" has two very
+    // different causes — the agent never called preparar_turno, or it did and
+    // the push didn't land — and without this line the log can't tell them apart.
+    console.log(`[fn] ${call.name} ${JSON.stringify(args)}`);
     let content: string;
     try {
       const result = await dispatchFunction(call.name, args, { callId });
       content = JSON.stringify(result ?? { ok: true });
+      if (call.name === "preparar_turno") console.log(`[fn] preparar_turno -> ${content}`);
     } catch (err) {
       content = JSON.stringify({ error: (err as Error).message });
+      console.error(`[fn] ${call.name} FAILED: ${(err as Error).message}`);
       tell(browser, { type: "function_error", name: call.name, error: (err as Error).message });
     }
     dg.send(

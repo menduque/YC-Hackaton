@@ -4,7 +4,12 @@ import { WebSocketServer } from "ws";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { config, vendorStatus } from "./config.js";
-import { registerWidgetHub, pushSchedule } from "./ws/widgetHub.js";
+import {
+  registerWidgetHub,
+  pushSchedule,
+  lastSchedule,
+  replaySchedule,
+} from "./ws/widgetHub.js";
 import { dispatchFunction } from "./functions/index.js";
 import { AGENT_FUNCTIONS } from "./deepgram/agentConfig.js";
 import { bridgeBrowserToDeepgram } from "./deepgram/bridge.js";
@@ -57,6 +62,36 @@ app.post("/v1/voice/prepare", (req, res) => {
     payload: req.body as TurnoPayload,
   });
   res.json({ delivered });
+});
+
+// What the last call actually prepared — the answer to "is the widget showing
+// my call, or the example payload?". Compare this against the widget textarea.
+app.get("/v1/voice/last", (req, res) => {
+  const callId = String(req.query.callId ?? "demo");
+  const msg = lastSchedule(callId);
+  if (!msg) {
+    res.status(404).json({
+      ok: false,
+      error: `No call on callId=${callId} has prepared an appointment yet.`,
+    });
+    return;
+  }
+  res.json({ ok: true, callId, payload: msg.payload });
+});
+
+// Re-send that payload to the widget. For when the call worked but the widget
+// wasn't listening — service worker asleep, or no Treelan tab open yet.
+app.post("/v1/voice/replay", (req, res) => {
+  const callId = String(req.query.callId ?? "demo");
+  const delivered = replaySchedule(callId);
+  if (delivered < 0) {
+    res.status(404).json({
+      ok: false,
+      error: `No call on callId=${callId} has prepared an appointment yet.`,
+    });
+    return;
+  }
+  res.json({ ok: true, delivered });
 });
 
 // Debug: invoke a Deepgram function handler by name (once vendors are wired).
