@@ -167,6 +167,10 @@ export const AGENT_FUNCTIONS = [
             telefono: { type: "string", description: "Landline, if given" },
             celular: { type: "string", description: "Mobile, if given" },
             email: { type: "string", description: "Email, if given" },
+            fechaNacimiento: {
+              type: "string",
+              description: "Date of birth YYYY-MM-DD, if given. Fills Patient.birthDate.",
+            },
           },
           required: ["apellido", "nombre", "documento"],
         },

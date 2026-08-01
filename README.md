@@ -26,7 +26,7 @@ vendor/    Medplum monorepo, vendored (see vendor/README.md).
 | --- | --- |
 | `backend/src/clients/stedi.ts` | Eligibility 270/271 — payer-name → mock fixture, test mode only |
 | `backend/src/clients/moss.ts` | Semantic retrieval over indexed context |
-| `backend/src/clients/medplum.ts` | FHIR read (patient context) + write (`Appointment`, `Communication`) |
+| `backend/src/clients/medplum.ts` | FHIR read (patient context) + write (`Patient`, `Appointment`, `Communication`) |
 | `app/src/stedi/mock-requests.ts` | All 34 Stedi mock requests, extracted from their docs and verified live |
 | `app/src/stedi/to-fhir.ts` | 271 response → `Patient` / `Coverage` / `CoverageEligibilityResponse` |
 | `scripts/stedi-eligibility.mjs` | Run any mock eligibility request from the CLI |

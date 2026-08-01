@@ -40,8 +40,60 @@ export interface PatientContext {
   summary: string;
 }
 
+/** The identifier system we file the national id (DNI) under. */
+const DOCUMENTO_SYSTEM = "https://oido.ai/documento";
+
 export const medplum = {
   isConfigured: !!(config.medplum.clientId && config.medplum.clientSecret),
+
+  /** Open the client-credentials session early so it isn't paid for mid-call. */
+  async warmUp(): Promise<void> {
+    if (!this.isConfigured) return;
+    await getClient();
+  },
+
+  /**
+   * Create the caller as a `Patient` — or top up the one that's already there.
+   * This is what makes them show up in the Patients tab at app.medplum.com.
+   *
+   * Keyed on the national id (DNI), so calling twice with the same document
+   * updates rather than duplicates.
+   */
+  async upsertPatient(paciente: TurnoPayload["paciente"]): Promise<Patient> {
+    ensure(this.isConfigured);
+    const mp = await getClient();
+
+    const existing = paciente.documento
+      ? await mp.searchOne("Patient", { identifier: paciente.documento })
+      : undefined;
+
+    const draft: Patient = {
+      ...existing,
+      resourceType: "Patient",
+      active: true,
+      name: [{ use: "official", family: paciente.apellido, given: [paciente.nombre] }],
+      birthDate: paciente.fechaNacimiento || existing?.birthDate,
+      identifier: [
+        {
+          system: DOCUMENTO_SYSTEM,
+          value: paciente.documento,
+          type: { text: paciente.tipoDoc || "DNI" },
+        },
+      ],
+      telecom: [
+        ...(paciente.telefono ? [{ system: "phone" as const, value: paciente.telefono, use: "home" as const }] : []),
+        ...(paciente.celular ? [{ system: "phone" as const, value: paciente.celular, use: "mobile" as const }] : []),
+        ...(paciente.email ? [{ system: "email" as const, value: paciente.email }] : []),
+      ],
+      address: paciente.domicilio ? [{ text: paciente.domicilio }] : undefined,
+    };
+    // Don't file empty arrays — Medplum renders them as blank rows in the UI.
+    if (!draft.telecom?.length) delete draft.telecom;
+
+    return existing?.id
+      ? mp.updateResource<Patient>({ ...draft, id: existing.id })
+      : mp.createResource<Patient>(draft);
+  },
 
   /**
    * Look a patient up by national id (DNI). Medplum stores it as a
