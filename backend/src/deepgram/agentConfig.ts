@@ -106,6 +106,30 @@ export const AGENT_FUNCTIONS = [
             nombre: { type: "string", description: "First name(s)" },
             documento: { type: "string", description: "ID number" },
             tipoDoc: { type: "string", description: "ID type, default 'DNI'" },
+            // Never asked for (see the prompt) — but if the caller volunteers any
+            // of these, they have somewhere to land. Both the Treelan form and the
+            // MedPlum Patient have fields for them.
+            telefono: {
+              type: "string",
+              description: "Landline, ONLY if the caller volunteered it. Never ask.",
+            },
+            celular: {
+              type: "string",
+              description: "Mobile number, ONLY if the caller volunteered it. Never ask.",
+            },
+            email: {
+              type: "string",
+              description: "Email, ONLY if the caller volunteered it. Never ask.",
+            },
+            domicilio: {
+              type: "string",
+              description: "Street address, ONLY if the caller volunteered it. Never ask.",
+            },
+            fechaNacimiento: {
+              type: "string",
+              description:
+                "Date of birth YYYY-MM-DD, ONLY if the caller volunteered it. Never ask.",
+            },
           },
           required: ["apellido", "nombre", "documento"],
         },
